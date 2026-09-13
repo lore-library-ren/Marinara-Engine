@@ -212,7 +212,7 @@ export async function registerRawRoute(app: FastifyInstance) {
           : (resolvedEffort ?? undefined);
 
     const modelLower = conn.model.toLowerCase();
-    const isClaudeNoSampling = isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
+    const isClaudeNoSampling = conn.provider !== "custom" && isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
     if (isClaudeNoSampling) {
       temperature = undefined;
       topP = undefined;
@@ -222,6 +222,7 @@ export async function registerRawRoute(app: FastifyInstance) {
     }
 
     const isClaudeTemperatureOnly =
+      conn.provider !== "custom" &&
       !isClaudeNoSampling &&
       (/claude-(opus|sonnet)-4-[56]/.test(modelLower) || /claude-(opus|sonnet)-4\.[56]/.test(modelLower));
     if (isClaudeTemperatureOnly) {

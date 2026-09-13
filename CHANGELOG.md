@@ -8,6 +8,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Connection test messages now use saved generation defaults. Custom OpenAI-compatible endpoints preserve selected sampling and reasoning settings instead of applying model-name restrictions, and raw custom parameters take precedence over inferred local thinking controls.
+
+- Custom OpenAI-compatible endpoints now receive the selected reasoning effort even when the model name is unrecognized.
+
 ## [2.4.4]
 
 ### Added

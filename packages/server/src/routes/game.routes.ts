@@ -3184,7 +3184,7 @@ function gameGenOptions(
   // Claude adaptive-only models also forbid sampling parameters entirely; the Anthropic
   // provider strips them on the wire, but we omit them here so the
   // logged options match what is actually sent.
-  const isClaudeAdaptiveOnly = isClaudeAdaptiveOnlyNoSamplingModel(m);
+  const isClaudeAdaptiveOnly = providerLower !== "custom" && isClaudeAdaptiveOnlyNoSamplingModel(m);
   const defaultReasoningEffort = resolveProviderReasoningEffort({
     provider: providerLower,
     model: m,

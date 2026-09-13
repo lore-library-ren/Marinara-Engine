@@ -689,7 +689,7 @@ export class OpenAIProvider extends BaseLLMProvider {
    * reject them when reasoning effort is active.
    */
   private isNoTemperatureModel(model: string, reasoningEffort?: string): boolean {
-    if (this.isGenericCustomProvider() && !this.isOpenAIGpt55Or56Model(model)) return false;
+    if (this.isGenericCustomProvider()) return false;
     const m = model.toLowerCase();
     if (/^(o1|o3|o4)/.test(m)) return true;
     if (isOpenAIGpt56Model(m)) return true;
@@ -702,18 +702,12 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   private stripUnsupportedSamplerParameters(body: Record<string, unknown>, options: ChatOptions): void {
     if (!this.isNoTemperatureModel(options.model, options.reasoningEffort)) return;
-    const explicitCustomParameters = this.isGenericCustomProvider() ? options.customParameters : undefined;
-    const removeUnlessExplicit = (key: string) => {
-      if (!explicitCustomParameters || !Object.prototype.hasOwnProperty.call(explicitCustomParameters, key)) {
-        delete body[key];
-      }
-    };
-    removeUnlessExplicit("temperature");
-    removeUnlessExplicit("top_p");
-    removeUnlessExplicit("top_k");
-    removeUnlessExplicit("min_p");
-    removeUnlessExplicit("frequency_penalty");
-    removeUnlessExplicit("presence_penalty");
+    delete body.temperature;
+    delete body.top_p;
+    delete body.top_k;
+    delete body.min_p;
+    delete body.frequency_penalty;
+    delete body.presence_penalty;
   }
 
   private hasActiveReasoningEffort(reasoningEffort?: string | null): boolean {
@@ -833,6 +827,11 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   private applyChatCompletionsReasoning(body: Record<string, unknown>, options: ChatOptions): void {
+    if (this.isGenericCustomProvider()) {
+      if (options.reasoningEffort) body.reasoning_effort = options.reasoningEffort;
+      return;
+    }
+
     if (this.isNativeXAIConfigurableReasoningModel(options.model)) {
       const effort = this.resolveXAIReasoningEffort(options.reasoningEffort);
       if (effort && (effort !== "none" || this.supportsXAIReasoningDisable(options.model))) {
@@ -865,15 +864,6 @@ export class OpenAIProvider extends BaseLLMProvider {
           : {};
       body.reasoning_format = "none";
       body.chat_template_kwargs = { ...templateOptions, enable_thinking: false };
-      return;
-    }
-
-    if (this.isGenericCustomProvider()) {
-      if (this.hasExplicitReasoningDisable(options.reasoningEffort)) {
-        body.reasoning_effort = "none";
-      } else if (this.shouldSendReasoningEffort(options.model, options.reasoningEffort)) {
-        body.reasoning_effort = options.reasoningEffort;
-      }
       return;
     }
 
@@ -1238,10 +1228,9 @@ export class OpenAIProvider extends BaseLLMProvider {
     }
 
     this.applyOpenRouterServiceTier(body, options);
-    this.applyCustomParameters(body, options);
-    // Local chat templates may ignore reasoning_effort. Apply this after custom
-    // parameters so an explicit Reasoning Effort: Off choice remains authoritative.
+    // Apply inferred local controls before the user's raw request overrides.
     this.enforceLocalInferenceThinkingDisable(body, options, suppressModelParameters);
+    this.applyCustomParameters(body, options);
     this.stripUnsupportedSamplerParameters(body, options);
 
     logger.debug(
@@ -1526,8 +1515,8 @@ export class OpenAIProvider extends BaseLLMProvider {
     }
 
     this.applyOpenRouterServiceTier(body, options);
-    this.applyCustomParameters(body, options);
     this.enforceLocalInferenceThinkingDisable(body, options, suppressModelParameters);
+    this.applyCustomParameters(body, options);
     this.stripUnsupportedSamplerParameters(body, options);
 
     logger.debug(
