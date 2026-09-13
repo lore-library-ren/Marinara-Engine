@@ -79,6 +79,7 @@ const rawGenerateBodySchema = z
   .object({
     connectionId: z.string().trim().min(1),
     messages: z.array(rawMessageSchema).min(1).max(200),
+    chatId: z.string().trim().min(1).optional(),
     parameters: rawParametersSchema.optional(),
     streaming: z.boolean().optional(),
     returnPrompt: z.boolean().optional(),
@@ -314,6 +315,7 @@ export async function registerRawRoute(app: FastifyInstance) {
     req.raw.on("close", onClose);
 
     const runOptions = {
+      conversationId: body.chatId,
       model: conn.model,
       temperature,
       maxTokens: maxTokensForSend,

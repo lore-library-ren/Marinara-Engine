@@ -2367,6 +2367,7 @@ export class ProfessorMariWorkspaceService {
       const provider = createProviderForConnection(connection);
       const messages = await this.buildPromptMessages(args.chatId, connection);
       const baseOptions: ChatOptions = {
+        conversationId: args.chatId,
         ...this.baseChatOptions(connection, controller.signal, (delta) => {
           thinkingText += delta;
           appendTraceThinking(workspaceTrace, delta);

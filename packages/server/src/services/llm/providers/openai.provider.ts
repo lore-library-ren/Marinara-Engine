@@ -26,6 +26,8 @@ import {
 import { logger } from "../../../lib/logger.js";
 import { isLoopbackIp, isNonRoutableNetworkIp } from "../../../middleware/ip-allowlist.js";
 import { applyGlmThinkingParameters } from "./glm-request-compat.js";
+import { getCurrentConversationId } from "../conversation-context.js";
+import { APP_VERSION } from "@marinara-engine/shared";
 
 /**
  * Models that ONLY support the Responses API (`/responses`) and not Chat Completions.
@@ -545,7 +547,7 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   /** Build standard request headers. OpenRouter attribution is enforced by safeFetch. */
-  private buildHeaders(): Record<string, string> {
+  private buildHeaders(options: ChatOptions): Headers {
     const apiKey = this.apiKey.trim();
     const h: Record<string, string> = {
       "Content-Type": "application/json",
@@ -555,7 +557,13 @@ export class OpenAIProvider extends BaseLLMProvider {
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       ...(this.extraHeaders ?? {}),
     };
-    return h;
+    const headers = new Headers(h);
+    const conversationId = options.conversationId ?? getCurrentConversationId();
+    if (conversationId && !headers.has("x-opencode-session")) {
+      headers.set("x-opencode-session", conversationId);
+    }
+    if (!headers.has("User-Agent")) headers.set("User-Agent", `Marinara-Engine/${APP_VERSION}`);
+    return headers;
   }
 
   private isGenericCustomProvider(): boolean {
@@ -1249,7 +1257,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     const response = await llmFetch(url, {
       method: "POST",
-      headers: this.buildHeaders(),
+      headers: this.buildHeaders(options),
       body: JSON.stringify(body),
       bufferResponse: !effectiveStream,
       ...(options.signal ? { signal: options.signal } : {}),
@@ -1531,7 +1539,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     const response = await llmFetch(url, {
       method: "POST",
-      headers: this.buildHeaders(),
+      headers: this.buildHeaders(options),
       body: JSON.stringify(body),
       bufferResponse: !useStream,
       ...(options.signal ? { signal: options.signal } : {}),
@@ -2066,7 +2074,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     let response = await llmFetch(url, {
       method: "POST",
-      headers: this.buildHeaders(),
+      headers: this.buildHeaders(options),
       body: JSON.stringify(body),
       bufferResponse: !parseAsStream,
       ...(options.signal ? { signal: options.signal } : {}),
@@ -2085,7 +2093,7 @@ export class OpenAIProvider extends BaseLLMProvider {
         this.stripEncryptedItems(body);
         response = await llmFetch(url, {
           method: "POST",
-          headers: this.buildHeaders(),
+          headers: this.buildHeaders(options),
           body: JSON.stringify(body),
           bufferResponse: !parseAsStream,
           ...(options.signal ? { signal: options.signal } : {}),
@@ -2331,7 +2339,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     let response = await llmFetch(url, {
       method: "POST",
-      headers: this.buildHeaders(),
+      headers: this.buildHeaders(options),
       body: JSON.stringify(body),
       bufferResponse: !useStream,
       ...(options.signal ? { signal: options.signal } : {}),
@@ -2350,7 +2358,7 @@ export class OpenAIProvider extends BaseLLMProvider {
         this.stripEncryptedItems(body);
         response = await llmFetch(url, {
           method: "POST",
-          headers: this.buildHeaders(),
+          headers: this.buildHeaders(options),
           body: JSON.stringify(body),
           bufferResponse: !useStream,
           ...(options.signal ? { signal: options.signal } : {}),

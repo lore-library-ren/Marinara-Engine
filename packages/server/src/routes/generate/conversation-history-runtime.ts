@@ -278,6 +278,7 @@ export async function prepareConversationPromptHistory(args: {
     category: "agents",
   });
   const summaryRun = await generateMissingConversationSummaries({
+    conversationId: args.chatId,
     messages: summarySourceMessages.map((message) => ({
       id: typeof message.id === "string" ? message.id : undefined,
       role: String(message.role ?? ""),

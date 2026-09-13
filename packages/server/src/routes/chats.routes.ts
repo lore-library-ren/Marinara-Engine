@@ -1557,6 +1557,7 @@ export async function chatsRoutes(app: FastifyInstance) {
     const scopedMessages = startIdx > 0 ? allMessages.slice(startIdx) : allMessages;
 
     const result = await generateMissingConversationSummaries({
+      conversationId: req.params.id,
       messages: scopedMessages,
       metadata: chatMeta,
       provider: resolvedSummaryConnection.provider,
@@ -4273,6 +4274,7 @@ export async function chatsRoutes(app: FastifyInstance) {
           },
         ],
         {
+          conversationId: req.params.id,
           model,
           ...summaryTemperatureOptions,
           maxTokens: effectiveSummaryMaxTokens,
@@ -4420,6 +4422,7 @@ export async function chatsRoutes(app: FastifyInstance) {
     ];
 
     const result = await provider.chatComplete(messages, {
+      conversationId: req.params.id,
       model,
       ...summaryTemperatureOptions,
       maxTokens: summaryMaxTokens,

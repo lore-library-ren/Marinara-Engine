@@ -10,6 +10,7 @@ import { eq } from "../db/file-query.js";
 import { IMPORTED_GAME_ENGINE_ANCHOR_PREFIX } from "../db/file-backed-store.js";
 import { chats as chatsTable } from "../db/schema/index.js";
 import { logger, logDebugOverride } from "../lib/logger.js";
+import { getCurrentConversationId } from "../services/llm/conversation-context.js";
 import { readImageDimensionsFromFile } from "../utils/image-metadata.js";
 import { createChatsStorage, METADATA_WRITE_ORDINALS_KEY } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -3163,6 +3164,7 @@ function gameGenOptions(
     const enabledParameters = mergeEnabledParameters(parameters?.enabledParameters, overrides.enabledParameters);
     const stripped: ChatOptions = {
       model,
+      conversationId: overrides.conversationId ?? getCurrentConversationId(),
       suppressModelParameters: true,
     };
     if (overrides.stream !== undefined) stripped.stream = overrides.stream;
@@ -3191,6 +3193,7 @@ function gameGenOptions(
     reasoningEffort: "maximum",
   });
   const base: ChatOptions = {
+    conversationId: getCurrentConversationId(),
     model,
     maxTokens: 8192,
     verbosity: "high",

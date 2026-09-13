@@ -173,6 +173,8 @@ export interface LLMToolDefinition {
 
 export interface ChatOptions {
   model: string;
+  /** Persistent conversation ID for provider session affinity; never a request/run ID. */
+  conversationId?: string;
   temperature?: number;
   maxTokens?: number;
   /** Total context window limit for prompt + completion tokens. */

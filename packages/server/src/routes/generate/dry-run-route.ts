@@ -1794,6 +1794,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
 
       try {
         const result = await provider.chatComplete(providerMessages as any, {
+          conversationId: chatId,
           model: conn.model,
           temperature,
           maxTokens: maxTokensForSend,
@@ -1859,6 +1860,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
 
     try {
       const result = await provider.chatComplete(providerMessages as any, {
+        conversationId: chatId,
         model: conn.model,
         temperature,
         maxTokens: maxTokensForSend,

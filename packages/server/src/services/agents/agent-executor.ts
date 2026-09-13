@@ -832,6 +832,7 @@ export async function executeAgent(
 
     let responseText = "";
     const result = await provider.chatComplete(messages, {
+      conversationId: context.chatId,
       model,
       temperature,
       maxTokens,
@@ -884,6 +885,7 @@ export async function executeAgent(
       });
       let retryResponseText = "";
       const retryResult = await provider.chatComplete(retryMessages, {
+        conversationId: context.chatId,
         model,
         temperature,
         maxTokens,
@@ -1007,6 +1009,7 @@ async function executeBeholderLanePasses(args: {
 
       let laneText = "";
       const result = await provider.chatComplete(messages, {
+        conversationId: context.chatId,
         model,
         temperature,
         maxTokens,
@@ -1123,6 +1126,7 @@ async function executeAgentWithTools(
       round: round + 1,
     });
     const result = await provider.chatComplete(providerMessages, {
+      conversationId: context.chatId,
       model,
       temperature,
       maxTokens,
@@ -1219,6 +1223,7 @@ async function executeAgentWithTools(
   });
   const finalRoundStartedAt = Date.now();
   const finalResult = await provider.chatComplete(finalProviderMessages, {
+    conversationId: context.chatId,
     model,
     temperature,
     maxTokens,
@@ -1456,6 +1461,7 @@ export async function executeAgentBatch(
     let responseText = "";
     const result = await runProviderJob(() =>
       provider.chatComplete(messages, {
+        conversationId: context.chatId,
         model,
         temperature,
         maxTokens: batchMaxTokens,

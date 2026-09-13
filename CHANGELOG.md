@@ -8,6 +8,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- OpenAI-compatible requests now carry persistent conversation IDs in `x-opencode-session` across turns, retries, streams, and agent/tool calls. Explicit session headers and User-Agent values remain intact; calls without a conversation ID do not generate one.
+
 - Connection test messages now use saved generation defaults. Custom OpenAI-compatible endpoints preserve selected sampling and reasoning settings instead of applying model-name restrictions, and raw custom parameters take precedence over inferred local thinking controls.
 
 - Custom OpenAI-compatible endpoints now receive the selected reasoning effort even when the model name is unrecognized.

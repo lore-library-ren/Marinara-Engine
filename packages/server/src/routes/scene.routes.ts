@@ -484,6 +484,7 @@ export async function sceneRoutes(app: FastifyInstance) {
     const summaryMaxTokens = provider.maxTokensOverrideValue ?? 1024;
     try {
       result = await provider.chatComplete(summaryPrompt, {
+        conversationId: sceneChatId,
         model: conn.model,
         temperature: 0.8,
         maxTokens: summaryMaxTokens,
@@ -877,6 +878,7 @@ export async function sceneRoutes(app: FastifyInstance) {
     ];
 
     const result = await provider.chatComplete(planPrompt, {
+      conversationId: chatId,
       model: conn.model,
       temperature: 0.9,
       maxTokens: 16384,

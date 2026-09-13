@@ -54,6 +54,7 @@ import { androidLocalAuthHook, androidLocalLoginRoute } from "./middleware/andro
 import { arch, platform, release } from "node:os";
 import { execFileSync } from "node:child_process";
 import { getRuntimeMemorySnapshot } from "./utils/runtime-memory.js";
+import { withConversationContext } from "./services/llm/conversation-context.js";
 
 const isLite = process.env.MARINARA_LITE === "true" || process.env.MARINARA_LITE === "1";
 const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
@@ -204,8 +205,8 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // Keep fallback reporting attached to the originating request even when
   // generation passes through nested services. Streamed routes emit an SSE
   // event; ordinary requests expose a response header consumed by the client.
-  app.addHook("preHandler", (_request, reply, done) => {
-    runWithGenerationFallbackNotifier(createReplyFallbackNotifier(reply), done);
+  app.addHook("preHandler", (request, reply, done) => {
+    withConversationContext(request, () => runWithGenerationFallbackNotifier(createReplyFallbackNotifier(reply), done));
   });
 
   // ── Security headers ──
