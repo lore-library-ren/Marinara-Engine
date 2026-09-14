@@ -1,6 +1,19 @@
 # Local Marinara patch stack
 
-This installation maintains local changes on `fix/local-opencode-session` rather than modifying the upstream remote. No patches have been submitted or pushed. The starting release is Marinara 2.4.4, upstream commit `1a299369a`. The local `local-upstream-base` tag records the upstream base of the patch stack.
+The maintained fork is https://github.com/lore-library-ren/Marinara-Engine, branch `fix/local-opencode-session`. No upstream PR has been submitted. The starting release is Marinara 2.4.4, upstream commit `1a299369a`. The `local-upstream-base` tag records the upstream base of the patch stack.
+
+## Installing on another machine
+
+```powershell
+git clone --branch fix/local-opencode-session https://github.com/lore-library-ren/Marinara-Engine.git
+cd Marinara-Engine
+git remote add upstream https://github.com/Pasta-Devs/Marinara-Engine.git
+npx --yes pnpm@10.34.5 install --frozen-lockfile
+npx --yes pnpm@10.34.5 build
+.\start-local.bat
+```
+
+Use the prerequisite Node version from package.json. Configure the new installation's connections and environment separately; the fork does not include personal chats, API keys, or `.env`. For later updates to this fork's patch branch, use `git pull --ff-only` from a clean checkout and rebuild. If the patch branch has been rebased, inspect the divergence rather than forcing the pull.
 
 ## Changes to preserve
 
@@ -20,8 +33,8 @@ Stop Marinara before updating. Ensure `git status --short` shows no uncommitted 
 ```powershell
 $backupBranch = 'backup/local-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
 git branch $backupBranch
-git fetch origin
-git rebase --onto origin/main local-upstream-base fix/local-opencode-session
+git fetch upstream
+git rebase --onto upstream/main local-upstream-base fix/local-opencode-session
 ```
 
 Resolve conflicts by preserving the behavior described above. If the integration is unsuitable, `git rebase --abort` returns to the original stack while the rebase is in progress. Do not force an automatic conflict resolution. After resolving, validate before starting the server:
@@ -38,7 +51,7 @@ npx --yes pnpm@10.34.5 check
 Use the package-manager version pinned by the new upstream release if it changes. If the broad check is blocked by unrelated baseline failures, record the failure and run targeted lint/build checks; do not silently treat the full check as passed. Once integration and validation succeed, update the base marker:
 
 ```powershell
-git tag -f local-upstream-base origin/main
+git tag -f local-upstream-base upstream/main
 ```
 
 Run the local build with `start-local.bat`. The ordinary launcher includes an auto-update flow, so use the local launcher when preserving this patch stack. Only start one server against the data directory.

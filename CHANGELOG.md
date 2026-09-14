@@ -6,6 +6,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Added
 
+- Local fork maintenance notes now include clone/build instructions and distinguish the fork from the upstream update remote.
+
 ### Fixed
 
 - OpenAI-compatible requests now carry persistent conversation IDs in `x-opencode-session` across turns, retries, streams, and agent/tool calls. Explicit session headers and User-Agent values remain intact; calls without a conversation ID do not generate one.
