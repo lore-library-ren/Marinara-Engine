@@ -24,7 +24,7 @@ export type APIProvider =
   | "audio";
 
 /** Audio backends an audio connection can target (the former TTS sources). */
-export const AUDIO_GENERATION_SOURCES = ["openai", "elevenlabs", "pockettts", "xai"] as const;
+export const AUDIO_GENERATION_SOURCES = ["openai", "elevenlabs", "pockettts", "xai", "cartesia"] as const;
 export type AudioGenerationSource = (typeof AUDIO_GENERATION_SOURCES)[number];
 
 export const IMAGE_GENERATION_QUALITIES = ["auto", "low", "medium", "high", "xhigh", "max"] as const;

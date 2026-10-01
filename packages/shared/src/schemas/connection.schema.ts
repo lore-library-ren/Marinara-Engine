@@ -26,7 +26,7 @@ export const apiProviderSchema = z.enum([
   "audio",
 ]);
 
-export const audioGenerationSourceSchema = z.enum(["openai", "elevenlabs", "pockettts", "xai"]);
+export const audioGenerationSourceSchema = z.enum(["openai", "elevenlabs", "pockettts", "xai", "cartesia"]);
 
 export const imageGenerationQualitySchema = z.enum(IMAGE_GENERATION_QUALITIES);
 

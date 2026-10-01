@@ -36,6 +36,16 @@ export function useUpdateTTSConfig() {
 
 // ── Voices ───────────────────────────────────────
 
+export function useAudioConnectionVoices(connectionId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["tts", "voices", "connection", connectionId],
+    queryFn: () => api.get<TTSVoicesResponse>(`/tts/voices?connectionId=${encodeURIComponent(connectionId!)}`),
+    enabled: enabled && Boolean(connectionId),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
 export function useTTSVoices(source: TTSSource, baseUrl: string, enabled: boolean) {
   return useQuery({
     queryKey: KEYS.voices(source, baseUrl),

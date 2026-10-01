@@ -2,6 +2,7 @@
 // TTS Configuration Card (Connections Panel)
 // ──────────────────────────────────────────────
 import { useCallback, useState, useEffect, useId, useLayoutEffect, useMemo, useRef } from "react";
+import type { TFunction } from "i18next";
 import { createPortal } from "react-dom";
 import {
   Volume2,
@@ -89,6 +90,13 @@ const TTS_SOURCE_DEFAULTS: Record<
     voice: "",
     idleText: "ElevenLabs TTS",
   },
+  cartesia: {
+    label: "Cartesia",
+    baseUrl: "https://api.cartesia.ai",
+    model: "sonic-3.6",
+    voice: "",
+    idleText: "Cartesia",
+  },
   pockettts: {
     label: "PocketTTS",
     baseUrl: "http://localhost:8000",
@@ -110,6 +118,7 @@ const TTS_SOURCE_OPTIONS: Array<{ value: TTSSource; label: string }> = [
   { value: "elevenlabs", label: "ElevenLabs" },
   { value: "pockettts", label: "PocketTTS" },
   { value: "xai", label: "xAI Voice" },
+  { value: "cartesia", label: "Cartesia" },
 ];
 
 function defaultSourceProfile(source: TTSSource): TTSSourceProfile {
@@ -131,7 +140,7 @@ function defaultSourceProfile(source: TTSSource): TTSSourceProfile {
     npcDefaultVoicesEnabled: false,
     npcDefaultMaleVoices: [],
     npcDefaultFemaleVoices: [],
-    audioFormat: "mp3",
+    audioFormat: source === "cartesia" ? "wav" : "mp3",
   };
 }
 
@@ -221,7 +230,9 @@ function addSavedVoiceOption(options: VoiceOption[], voiceId: string): VoiceOpti
   return [...options, { id, name: id, category: "saved" }];
 }
 
-function formatVoiceOptionLabel(option: VoiceOption): string {
+function formatVoiceOptionLabel(option: VoiceOption, localizeUi: TFunction): string {
+  if (option.category === "cartesia-owned")
+    return localizeUi("ui.cartesia.ownedVoice", { name: option.name, id: option.id });
   if (option.category === "saved") return `${option.id} (saved; not in current voice list)`;
   return option.name === option.id ? option.id : `${option.name} (${option.id})`;
 }
@@ -728,7 +739,7 @@ function VoiceSelect({
       value={value}
       options={options.map((option) => ({
         id: option.id,
-        label: formatVoiceOptionLabel(option),
+        label: formatVoiceOptionLabel(option, localizeUi),
         searchText: readVoiceMetadata(option),
       }))}
       disabled={disabled}
@@ -762,6 +773,7 @@ function CustomizableVoiceInput({
   onChange: (value: string) => void;
 }) {
   const listId = useId();
+  const { t: localizeUi } = useUiTranslation();
   return (
     <div className="min-w-0 flex-1">
       <input
@@ -778,7 +790,7 @@ function CustomizableVoiceInput({
       <datalist id={listId}>
         {options.map((option) => (
           <option key={option.id} value={option.id}>
-            {formatVoiceOptionLabel(option)}
+            {formatVoiceOptionLabel(option, localizeUi)}
           </option>
         ))}
       </datalist>
@@ -857,7 +869,7 @@ function PocketTTSVoiceControl({
           </option>
           {options.map((option) => (
             <option key={option.id} value={option.id}>
-              {formatVoiceOptionLabel(option)}
+              {formatVoiceOptionLabel(option, localizeUi)}
             </option>
           ))}
         </select>
@@ -909,7 +921,7 @@ function NpcDefaultVoicePool({
                 onChange={(e) => onToggle(option.id, e.target.checked)}
                 className="h-3 w-3 shrink-0 rounded border-[var(--border)] accent-[var(--primary)]"
               />
-              <span className="truncate">{formatVoiceOptionLabel(option)}</span>
+              <span className="truncate">{formatVoiceOptionLabel(option, localizeUi)}</span>
             </label>
           ))}
         </div>
@@ -1207,8 +1219,14 @@ export function TTSConfigCard() {
         payload.voiceMode === "per-character"
           ? (payload.voiceAssignments.find((assignment) => assignment.voice)?.voice ?? payload.voice)
           : payload.voice;
-      if (payload.source === "elevenlabs" && !previewVoice) {
-        toast.error(localizeUi("ui.panels.ttsconfigcard.selectAnElevenlabsVoiceBeforePreviewing"));
+      if ((payload.source === "elevenlabs" || payload.source === "cartesia") && !previewVoice) {
+        toast.error(
+          localizeUi(
+            payload.source === "cartesia"
+              ? "ui.cartesia.selectVoiceFirst"
+              : "ui.panels.ttsconfigcard.selectAnElevenlabsVoiceBeforePreviewing",
+          ),
+        );
         return;
       }
 
@@ -1319,7 +1337,8 @@ export function TTSConfigCard() {
     if (!model || choices.some((option) => option.id === model)) return choices;
     return [{ id: model, name: model }, ...choices];
   }, [model, modelsData]);
-  const canRefreshVoices = Boolean(baseUrl.trim()) && (source !== "elevenlabs" || Boolean(apiKey.trim()));
+  const canRefreshVoices =
+    Boolean(baseUrl.trim()) && ((source !== "elevenlabs" && source !== "cartesia") || Boolean(apiKey.trim()));
   const elevenLabsMatchedMaleVoiceOptions = useMemo(
     () =>
       voiceOptions.filter((option) => isElevenLabsVoiceForGender(option, "male", ELEVENLABS_DEFAULT_MALE_VOICE_NAMES)),
@@ -1407,28 +1426,33 @@ export function TTSConfigCard() {
   const selectedLanguage =
     ELEVENLABS_TTS_LANGUAGE_OPTIONS.find((option) => option.code === elevenLabsLanguageCode) ??
     ELEVENLABS_TTS_LANGUAGE_OPTIONS[0];
-  const speedMin = source === "elevenlabs" || source === "xai" ? 0.7 : 0.25;
-  const speedMax = source === "elevenlabs" ? 1.2 : source === "xai" ? 1.5 : 4.0;
+  const speedMin = source === "cartesia" ? 0.6 : source === "elevenlabs" || source === "xai" ? 0.7 : 0.25;
+  const speedMax = source === "elevenlabs" ? 1.2 : source === "xai" || source === "cartesia" ? 1.5 : 4.0;
   const speedHelp =
-    source === "elevenlabs"
-      ? "Playback speed. ElevenLabs supports 0.7×–1.2×; wider saved values are clamped when spoken."
-      : source === "xai"
-        ? "Playback speed. xAI Voice supports 0.7×–1.5×; wider saved values are clamped when spoken."
-        : "Playback speed. 1.0 is normal; range is 0.25×–4.0×.";
+    source === "cartesia"
+      ? localizeUi("ui.cartesia.speedHelp")
+      : source === "elevenlabs"
+        ? "Playback speed. ElevenLabs supports 0.7×–1.2×; wider saved values are clamped when spoken."
+        : source === "xai"
+          ? "Playback speed. xAI Voice supports 0.7×–1.5×; wider saved values are clamped when spoken."
+          : "Playback speed. 1.0 is normal; range is 0.25×–4.0×.";
   const speedSliderValue = Math.min(speedMax, Math.max(speedMin, speed));
   const speedLabel =
-    (source === "elevenlabs" || source === "xai") && speedSliderValue !== speed
+    (source === "elevenlabs" || source === "xai" || source === "cartesia") && speedSliderValue !== speed
       ? `Speed — ${speedSliderValue.toFixed(2)}× (clamped from ${speed.toFixed(2)}×)`
       : `Speed — ${speed.toFixed(2)}×`;
-  const previewDisabled = !enabled || ttsState === "loading" || (source === "elevenlabs" && !previewVoice);
+  const previewDisabled =
+    !enabled || ttsState === "loading" || ((source === "elevenlabs" || source === "cartesia") && !previewVoice);
   const previewTitle =
-    source === "elevenlabs" && !previewVoice
-      ? "Select an ElevenLabs voice first"
-      : !enabled
-        ? "Enable TTS first"
-        : ttsState === "playing" || ttsState === "blocked"
-          ? "Stop preview"
-          : "Preview voice";
+    source === "cartesia" && !previewVoice
+      ? localizeUi("ui.cartesia.selectVoiceFirst")
+      : source === "elevenlabs" && !previewVoice
+        ? "Select an ElevenLabs voice first"
+        : !enabled
+          ? "Enable TTS first"
+          : ttsState === "playing" || ttsState === "blocked"
+            ? "Stop preview"
+            : "Preview voice";
   const updateVoiceAssignments = (nextAssignments: TTSVoiceAssignment[]) => {
     setVoiceAssignments(nextAssignments);
     mark({ voiceAssignments: nextAssignments });
@@ -1605,13 +1629,15 @@ export function TTSConfigCard() {
           <FieldRow
             label={localizeUi("ui.panels.ttsconfigcard.baseUrl")}
             help={
-              source === "elevenlabs"
-                ? localizeUi("ui.panels.ttsconfigcard.theElevenlabsApiRootUseTheDefaultUnlessYou")
-                : source === "pockettts"
-                  ? localizeUi("ui.panels.ttsconfigcard.thePocketttsOpenaiCompatibleServerRootItsDefaultIs")
-                  : source === "xai"
-                    ? localizeUi("ui.panels.ttsconfigcard.theXaiVoiceApiRootUseHttpsApiX")
-                    : localizeUi("ui.panels.ttsconfigcard.theOpenaiCompatibleTtsApiEndpointUseTheDefault")
+              source === "cartesia"
+                ? localizeUi("ui.cartesia.baseUrlHelp")
+                : source === "elevenlabs"
+                  ? localizeUi("ui.panels.ttsconfigcard.theElevenlabsApiRootUseTheDefaultUnlessYou")
+                  : source === "pockettts"
+                    ? localizeUi("ui.panels.ttsconfigcard.thePocketttsOpenaiCompatibleServerRootItsDefaultIs")
+                    : source === "xai"
+                      ? localizeUi("ui.panels.ttsconfigcard.theXaiVoiceApiRootUseHttpsApiX")
+                      : localizeUi("ui.panels.ttsconfigcard.theOpenaiCompatibleTtsApiEndpointUseTheDefault")
             }
           >
             <div className="relative">
@@ -1655,13 +1681,15 @@ export function TTSConfigCard() {
           <FieldRow
             label={localizeUi("ui.panels.ttsconfigcard.model")}
             help={
-              source === "elevenlabs"
-                ? localizeUi("ui.panels.ttsconfigcard.elevenlabsModelIdToUseUseElevenV3For")
-                : source === "pockettts"
-                  ? localizeUi("ui.panels.ttsconfigcard.pocketttsSelectsItsLanguageModelWhenYouStartThe")
-                  : source === "xai"
-                    ? localizeUi("ui.panels.ttsconfigcard.xaiVoiceCurrentlyUsesTheTtsEndpointThisIs")
-                    : localizeUi("ui.panels.ttsconfigcard.ttsModelToUseEGTts1Tts")
+              source === "cartesia"
+                ? localizeUi("ui.cartesia.modelHelp")
+                : source === "elevenlabs"
+                  ? localizeUi("ui.panels.ttsconfigcard.elevenlabsModelIdToUseUseElevenV3For")
+                  : source === "pockettts"
+                    ? localizeUi("ui.panels.ttsconfigcard.pocketttsSelectsItsLanguageModelWhenYouStartThe")
+                    : source === "xai"
+                      ? localizeUi("ui.panels.ttsconfigcard.xaiVoiceCurrentlyUsesTheTtsEndpointThisIs")
+                      : localizeUi("ui.panels.ttsconfigcard.ttsModelToUseEGTts1Tts")
             }
           >
             {source === "elevenlabs" ? (
@@ -1741,15 +1769,17 @@ export function TTSConfigCard() {
             <FieldRow
               label={localizeUi("ui.panels.ttsconfigcard.allCharactersVoice")}
               help={
-                source === "elevenlabs"
-                  ? localizeUi("ui.panels.ttsconfigcard.elevenlabsVoicesAreFetchedByNameAndSavedBy")
-                  : source === "pockettts"
-                    ? localizeUi("ui.panels.ttsconfigcard.pocketttsBuiltInOrCustomVoiceFromYourServer")
-                    : source === "xai"
-                      ? localizeUi("ui.panels.ttsconfigcard.xaiVoiceIdBuiltInsIncludeEveAraRex")
-                      : localizeUi(
-                          "ui.panels.ttsconfigcard.chooseAProviderVoiceOrEnterACustomOpenaiCompatibleValueSuchAsAKokoroMix",
-                        )
+                source === "cartesia"
+                  ? localizeUi("ui.cartesia.voiceHelp")
+                  : source === "elevenlabs"
+                    ? localizeUi("ui.panels.ttsconfigcard.elevenlabsVoicesAreFetchedByNameAndSavedBy")
+                    : source === "pockettts"
+                      ? localizeUi("ui.panels.ttsconfigcard.pocketttsBuiltInOrCustomVoiceFromYourServer")
+                      : source === "xai"
+                        ? localizeUi("ui.panels.ttsconfigcard.xaiVoiceIdBuiltInsIncludeEveAraRex")
+                        : localizeUi(
+                            "ui.panels.ttsconfigcard.chooseAProviderVoiceOrEnterACustomOpenaiCompatibleValueSuchAsAKokoroMix",
+                          )
               }
             >
               <div className="flex gap-2">
@@ -1997,7 +2027,7 @@ export function TTSConfigCard() {
             </div>
           </FieldRow>
 
-          {source !== "elevenlabs" && (
+          {source !== "elevenlabs" && source !== "cartesia" && (
             <FieldRow
               label={localizeUi("ui.panels.ttsconfigcard.audioFormat")}
               help={localizeUi("ui.panels.ttsconfigcard.outputAudioFormatWavAreUsefulForLocalSelf")}

@@ -22,6 +22,7 @@ import {
   type RemoteConnectionModel,
 } from "../../hooks/use-connections";
 import { usePresets } from "../../hooks/use-presets";
+import { useAudioConnectionVoices } from "../../hooks/use-tts";
 import {
   ArrowLeft,
   Save,
@@ -251,6 +252,13 @@ const AUDIO_SOURCE_OPTIONS: Array<{
     defaultVoice: "alloy",
   },
   {
+    id: "cartesia",
+    name: "Cartesia",
+    defaultBaseUrl: "https://api.cartesia.ai",
+    defaultModel: "sonic-3.6",
+    defaultVoice: "",
+  },
+  {
     id: "pockettts",
     name: "PocketTTS",
     defaultBaseUrl: "http://localhost:8000",
@@ -317,6 +325,10 @@ export function ConnectionEditor() {
   const closeConnectionDetail = useUIStore((s) => s.closeConnectionDetail);
 
   const { data: conn, isLoading } = useConnection(connectionDetailId);
+  const cartesiaVoices = useAudioConnectionVoices(
+    connectionDetailId,
+    conn?.provider === "audio" && conn?.audioSource === "cartesia",
+  );
   const parameterPreview = useEffectiveGenerationParameters(
     connectionDetailId,
     !!conn && isLanguageGenerationConnection(conn),
@@ -646,35 +658,37 @@ export function ConnectionEditor() {
     (localProvider === "video_generation" &&
       (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui"));
   const apiKeyLink =
-    localProvider === "image_generation" && selectedImageService === "arli"
-      ? { label: t("connections.mediaSources.arli.apiKeyLink"), url: "https://www.arliai.com/docs/api?lang=en" }
-      : localProvider === "image_generation" && selectedImageService === "venice"
-        ? { label: "Get your Venice API key", url: "https://venice.ai/settings/api" }
-        : localProvider === "image_generation" && selectedImageService === "zai"
-          ? { label: t("connections.mediaSources.zai.apiKeyLink"), url: "https://z.ai/manage-apikey/apikey-list" }
-          : (localProvider === "image_generation" && selectedImageService === "atlas") ||
-              (localProvider === "video_generation" && selectedVideoDefaultsService === "atlas")
-            ? {
-                label: t("connections.mediaSources.atlas.apiKeyLink"),
-                url: "https://www.atlascloud.ai/user/api-keys",
-              }
-            : localProvider === "video_generation" && selectedVideoDefaultsService === "xai"
-              ? API_KEY_LINKS.xai
-              : localProvider === "video_generation" && selectedVideoDefaultsService === "openrouter"
-                ? selectedVideoProvider === "nanogpt"
-                  ? API_KEY_LINKS.nanogpt
-                  : API_KEY_LINKS.openrouter
-                : localProvider === "video_generation" && selectedVideoDefaultsService === "seedance"
-                  ? { label: "Open Seedance API docs", url: "https://seedance2.ai/api-docs" }
-                  : localProvider === "video_generation" &&
-                      (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui")
-                    ? undefined
-                    : localProvider === "zai"
-                      ? {
-                          label: t("connections.mediaSources.zai.apiKeyLink"),
-                          url: "https://z.ai/manage-apikey/apikey-list",
-                        }
-                      : API_KEY_LINKS[localProvider];
+    localProvider === "audio" && localAudioSource === "cartesia"
+      ? { label: localizeUi("ui.cartesia.apiKeyLink"), url: "https://play.cartesia.ai/keys" }
+      : localProvider === "image_generation" && selectedImageService === "arli"
+        ? { label: t("connections.mediaSources.arli.apiKeyLink"), url: "https://www.arliai.com/docs/api?lang=en" }
+        : localProvider === "image_generation" && selectedImageService === "venice"
+          ? { label: "Get your Venice API key", url: "https://venice.ai/settings/api" }
+          : localProvider === "image_generation" && selectedImageService === "zai"
+            ? { label: t("connections.mediaSources.zai.apiKeyLink"), url: "https://z.ai/manage-apikey/apikey-list" }
+            : (localProvider === "image_generation" && selectedImageService === "atlas") ||
+                (localProvider === "video_generation" && selectedVideoDefaultsService === "atlas")
+              ? {
+                  label: t("connections.mediaSources.atlas.apiKeyLink"),
+                  url: "https://www.atlascloud.ai/user/api-keys",
+                }
+              : localProvider === "video_generation" && selectedVideoDefaultsService === "xai"
+                ? API_KEY_LINKS.xai
+                : localProvider === "video_generation" && selectedVideoDefaultsService === "openrouter"
+                  ? selectedVideoProvider === "nanogpt"
+                    ? API_KEY_LINKS.nanogpt
+                    : API_KEY_LINKS.openrouter
+                  : localProvider === "video_generation" && selectedVideoDefaultsService === "seedance"
+                    ? { label: "Open Seedance API docs", url: "https://seedance2.ai/api-docs" }
+                    : localProvider === "video_generation" &&
+                        (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui")
+                      ? undefined
+                      : localProvider === "zai"
+                        ? {
+                            label: t("connections.mediaSources.zai.apiKeyLink"),
+                            url: "https://z.ai/manage-apikey/apikey-list",
+                          }
+                        : API_KEY_LINKS[localProvider];
 
   useEffect(() => {
     if (localProvider !== "image_generation" || !selectedImageDefaultsService) {
@@ -2020,9 +2034,11 @@ export function ConnectionEditor() {
                           ? localizeUi("ui.connections.connectioneditor.speechSoundEffectsAndMusicGeneration")
                           : src.id === "openai"
                             ? localizeUi("ui.connections.connectioneditor.openaiOrAnyCompatibleAudioSpeechEndpoint")
-                            : src.id === "pockettts"
-                              ? localizeUi("ui.connections.connectioneditor.localPocketttsServerFreePrivateOffline")
-                              : localizeUi("ui.connections.connectioneditor.xaiGrokVoiceSynthesis")}
+                            : src.id === "cartesia"
+                              ? localizeUi("ui.cartesia.connectionDescription")
+                              : src.id === "pockettts"
+                                ? localizeUi("ui.connections.connectioneditor.localPocketttsServerFreePrivateOffline")
+                                : localizeUi("ui.connections.connectioneditor.xaiGrokVoiceSynthesis")}
                       </span>
                     </button>
                   );
@@ -2032,6 +2048,47 @@ export function ConnectionEditor() {
                 <span className="text-xs font-medium text-[var(--muted-foreground)]">
                   {localizeUi("ui.connections.connectioneditor.defaultVoice")}
                 </span>
+                {localAudioSource === "cartesia" && (
+                  <div className="space-y-2">
+                    <select
+                      aria-label={localizeUi("ui.cartesia.voicePicker")}
+                      value={cartesiaVoices.data?.voices.includes(localAudioVoice) ? localAudioVoice : ""}
+                      onChange={(event) => {
+                        if (event.target.value) {
+                          setLocalAudioVoice(event.target.value);
+                          markDirty();
+                        }
+                      }}
+                      className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)]"
+                    >
+                      <option value="">{localizeUi("ui.cartesia.selectVoiceFirst")}</option>
+                      {cartesiaVoices.data?.source === "cartesia" &&
+                        cartesiaVoices.data.voiceOptions?.map((voice) => (
+                          <option key={voice.id} value={voice.id}>
+                            {voice.category === "cartesia-owned"
+                              ? localizeUi("ui.cartesia.ownedVoice", { name: voice.name, id: voice.id })
+                              : voice.name}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={cartesiaVoices.isFetching || conn?.audioSource !== "cartesia"}
+                      onClick={() => void cartesiaVoices.refetch()}
+                      className="text-xs text-sky-400 disabled:opacity-50"
+                    >
+                      {localizeUi("ui.cartesia.refreshVoices")}
+                    </button>
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      {localizeUi("ui.cartesia.saveBeforeRefresh")}
+                    </p>
+                    {cartesiaVoices.isError && (
+                      <p role="alert" className="text-xs text-[var(--destructive)]">
+                        {localizeUi("ui.cartesia.voiceError")}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <input
                   value={localAudioVoice}
                   onChange={(event) => {

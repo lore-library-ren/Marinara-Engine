@@ -1,3 +1,4 @@
+import { cartesiaHeaders, CARTESIA_DEFAULT_MODEL } from "../services/connections/cartesia-tts.js";
 // ──────────────────────────────────────────────
 // Routes: Connections
 // ──────────────────────────────────────────────
@@ -290,6 +291,7 @@ export function buildConnectionTestCatalogUrl(
   audioSource?: string | null,
 ): string {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  if (provider === "audio" && audioSource === "cartesia") return `${normalizedBaseUrl}/voices?limit=1`;
   if (provider === "audio" && (audioSource || "elevenlabs") === "elevenlabs") {
     return `${normalizedBaseUrl.replace(/\/v\d+$/, "")}/v1/models`;
   }
@@ -673,6 +675,10 @@ export async function connectionsRoutes(app: FastifyInstance) {
         headers["anthropic-version"] = "2023-06-01";
       }
 
+      if (conn.provider === "audio" && conn.audioSource === "cartesia") {
+        for (const key of Object.keys(headers)) delete headers[key];
+        Object.assign(headers, cartesiaHeaders(conn.apiKey));
+      }
       const imageSource =
         conn.provider === "image_generation" ? resolveImageGenerationSource(conn as any, baseUrl) : "";
       if (conn.provider === "video_generation") {
@@ -788,6 +794,9 @@ export async function connectionsRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/:id/models", async (req, reply) => {
     const conn = await storage.getWithKey(req.params.id);
     if (!conn) return reply.status(404).send({ error: "Connection not found" });
+    if (conn.provider === "audio" && conn.audioSource === "cartesia") {
+      return { models: [{ id: CARTESIA_DEFAULT_MODEL, name: "Sonic 3.6" }] };
+    }
 
     try {
       // Claude (Subscription) has no remote /models endpoint — return the

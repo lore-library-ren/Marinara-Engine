@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import { z } from "zod";
 
-export const ttsSourceSchema = z.enum(["openai", "elevenlabs", "pockettts", "xai"]);
+export const ttsSourceSchema = z.enum(["openai", "elevenlabs", "pockettts", "xai", "cartesia"]);
 export type TTSSource = z.infer<typeof ttsSourceSchema>;
 
 export const ttsAudioFormatSchema = z.enum(["mp3", "wav"]);
@@ -203,6 +203,7 @@ export const ttsSourceProfilesSchema = z
     elevenlabs: ttsSourceProfileSchema.optional(),
     pockettts: ttsSourceProfileSchema.optional(),
     xai: ttsSourceProfileSchema.optional(),
+    cartesia: ttsSourceProfileSchema.optional(),
   })
   .default({});
 export type TTSSourceProfiles = z.infer<typeof ttsSourceProfilesSchema>;

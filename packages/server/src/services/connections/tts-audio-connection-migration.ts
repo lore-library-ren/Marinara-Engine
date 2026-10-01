@@ -77,6 +77,7 @@ export async function migrateTtsSettingsToAudioConnection(db: DB) {
     elevenlabs: "ElevenLabs",
     pockettts: "PocketTTS (local)",
     xai: "xAI Audio",
+    cartesia: "Cartesia",
   };
   await connections.create({
     name: sourceNames[cfg.source] ?? "Audio",
