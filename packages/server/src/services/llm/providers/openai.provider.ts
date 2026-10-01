@@ -716,7 +716,7 @@ export class OpenAIProvider extends BaseLLMProvider {
    * reject them when reasoning effort is active.
    */
   private isNoTemperatureModel(model: string, reasoningEffort?: string): boolean {
-    if (this.isGenericCustomProvider() && !this.isOpenAINoSamplingModel(model)) return false;
+    if (this.isGenericCustomProvider()) return false;
     const m = model.toLowerCase();
     if (/^(o1|o3|o4)/.test(m)) return true;
     if (this.isOpenAINoSamplingModel(m)) return true;
@@ -857,6 +857,35 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   private applyChatCompletionsReasoning(body: Record<string, unknown>, options: ChatOptions): void {
+    if (
+      applyGlmThinkingParameters(body, {
+        model: options.model,
+        baseUrl: this.baseUrl,
+        providerKind: this.providerKind,
+        enableThinking: options.enableThinking,
+        reasoningEffort: options.reasoningEffort,
+      })
+    )
+      return;
+
+    if (this.isGenericCustomProvider()) {
+      // GLM 5.3 served through a remote non-native gateway only accepts
+      // low/high/max and cannot disable reasoning: forward the configured
+      // effort mapped onto those levels, and send the lightest level instead
+      // of a rejected "none" (mirrors the native Z.AI and NanoGPT handling
+      // above). Local inference servers keep the generic behavior so their
+      // template kwarg wins.
+      const customGlmEffort = glm53CustomGatewayReasoningEffort(options.model, this.baseUrl, options.reasoningEffort);
+      if (customGlmEffort) {
+        body.reasoning_effort = customGlmEffort;
+      } else if (this.hasExplicitReasoningDisable(options.reasoningEffort)) {
+        body.reasoning_effort = "none";
+      } else if (this.hasActiveReasoningEffort(options.reasoningEffort)) {
+        body.reasoning_effort = options.reasoningEffort;
+      }
+      return;
+    }
+
     if (isOpenAIGpt6AstraModel(options.model) && this.hasExplicitReasoningDisable(options.reasoningEffort)) {
       body.reasoning_effort = "low";
       return;
@@ -873,17 +902,6 @@ export class OpenAIProvider extends BaseLLMProvider {
       return;
     }
 
-    if (
-      applyGlmThinkingParameters(body, {
-        model: options.model,
-        baseUrl: this.baseUrl,
-        providerKind: this.providerKind,
-        enableThinking: options.enableThinking,
-        reasoningEffort: options.reasoningEffort,
-      })
-    )
-      return;
-
     if (this.providerKind === "local-sidecar" && this.hasExplicitReasoningDisable(options.reasoningEffort)) {
       const templateOptions =
         body.chat_template_kwargs &&
@@ -893,24 +911,6 @@ export class OpenAIProvider extends BaseLLMProvider {
           : {};
       body.reasoning_format = "none";
       body.chat_template_kwargs = { ...templateOptions, enable_thinking: false };
-      return;
-    }
-
-    if (this.isGenericCustomProvider()) {
-      // GLM 5.3 served through a remote non-native gateway only accepts
-      // low/high/max and cannot disable reasoning: forward the configured
-      // effort mapped onto those levels, and send the lightest level instead
-      // of a rejected "none" (mirrors the native Z.AI and NanoGPT handling
-      // above). Local inference servers keep the generic behavior so their
-      // template kwarg wins.
-      const customGlmEffort = glm53CustomGatewayReasoningEffort(options.model, this.baseUrl, options.reasoningEffort);
-      if (customGlmEffort) {
-        body.reasoning_effort = customGlmEffort;
-      } else if (this.hasExplicitReasoningDisable(options.reasoningEffort)) {
-        body.reasoning_effort = "none";
-      } else if (this.shouldSendReasoningEffort(options.model, options.reasoningEffort)) {
-        body.reasoning_effort = options.reasoningEffort;
-      }
       return;
     }
 
@@ -1304,10 +1304,10 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     this.applyOpenRouterPromptCaching(body, options);
     this.applyServiceTier(body, options);
-    this.applyCustomParameters(body, options);
-    // Local chat templates may ignore reasoning_effort. Apply this after custom
-    // parameters so an explicit Reasoning Effort: Off choice remains authoritative.
+    if (!this.isGenericCustomProvider()) this.applyCustomParameters(body, options);
+    // Keep built-in thinking controls authoritative; custom endpoints apply raw overrides last.
     this.enforceLocalInferenceThinkingDisable(body, options, suppressModelParameters);
+    if (this.isGenericCustomProvider()) this.applyCustomParameters(body, options);
     this.stripUnsupportedSamplerParameters(body, options);
 
     logger.debug(
@@ -1591,8 +1591,9 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     this.applyOpenRouterPromptCaching(body, options);
     this.applyServiceTier(body, options);
-    this.applyCustomParameters(body, options);
+    if (!this.isGenericCustomProvider()) this.applyCustomParameters(body, options);
     this.enforceLocalInferenceThinkingDisable(body, options, suppressModelParameters);
+    if (this.isGenericCustomProvider()) this.applyCustomParameters(body, options);
     this.stripUnsupportedSamplerParameters(body, options);
 
     logger.debug(

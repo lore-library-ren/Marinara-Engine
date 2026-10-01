@@ -1797,7 +1797,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     const modelLc = (conn.model ?? "").toLowerCase();
 
     // Claude adaptive-only models: ALL sampling params removed except max_tokens (provider returns 400 otherwise).
-    const isClaudeNoSampling = isClaudeAdaptiveOnlyNoSamplingModel(modelLc);
+    const isClaudeNoSampling = providerLower !== "custom" && isClaudeAdaptiveOnlyNoSamplingModel(modelLc);
     if (isClaudeNoSampling) {
       temperature = undefined;
       topP = undefined;
@@ -1808,6 +1808,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
 
     // Claude 4.5/4.6: only temperature supported — strip other sampling params.
     const isClaudeTemperatureOnly =
+      providerLower !== "custom" &&
       !isClaudeNoSampling &&
       (/claude-(opus|sonnet)-4-[56]/.test(modelLc) || /claude-(opus|sonnet)-4\.[56]/.test(modelLc));
     if (isClaudeTemperatureOnly) {

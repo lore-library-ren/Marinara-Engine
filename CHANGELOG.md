@@ -4,6 +4,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+- Restored custom API parameter choices across chat and diagnostics: saved reasoning, sampling, and token settings survive model-name and Game/Scene defaults, while chat overrides and raw custom parameters retain priority.
+
 - Restored the local OpenCode session-header fix across chat, agents, summaries, and connection diagnostics after updating to 2.4.6.
 
 - Restored local Cartesia Audio/TTS support with Sonic 3.6, owned-voice discovery, WAV playback, and encrypted connection credentials after updating to 2.4.6.

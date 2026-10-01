@@ -74,6 +74,9 @@ export function resolveProviderReasoningEffort(args: {
   const modelLower = args.model.toLowerCase();
   const providerLower = args.provider.toLowerCase();
 
+  // Custom endpoints own their supported effort levels.
+  if (providerLower === "custom") return args.reasoningEffort === "maximum" ? "max" : args.reasoningEffort;
+
   const xaiUsesAutoReasoning =
     (providerLower === "xai" && isXaiAutoReasoningModel(modelLower)) ||
     (providerLower === "openrouter" && modelLower.startsWith("x-ai/grok-"));

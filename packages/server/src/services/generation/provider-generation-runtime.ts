@@ -147,16 +147,10 @@ export function resolveGenerationProviderRuntime(args: GenerationProviderRuntime
   };
 
   const isLocalGemma = (args.connection.model ?? "").toLowerCase().includes("gemma");
-  applyParameterOverrides(connectionParams, "connection");
-  applyParameterOverrides(chatParams, "chat");
-  runtime.customParameters = mergeCustomParameters(
-    runtime.customParameters,
-    resolveManagedGenerationParameters(
-      args.managedParameterDefinitions,
-      connectionParams?.managedCustomParameters,
-      chatParams?.managedCustomParameters,
-    ),
-  );
+  if (args.connection.provider !== "custom") {
+    applyParameterOverrides(connectionParams, "connection");
+    applyParameterOverrides(chatParams, "chat");
+  }
 
   if (args.isSceneChat) {
     forceParameters("scene", { maxTokens: 8192, reasoningEffort: "maximum", verbosity: "high" });
@@ -176,8 +170,23 @@ export function resolveGenerationProviderRuntime(args: GenerationProviderRuntime
     });
   }
 
+  // Explicit custom settings win over mode defaults; chat choices win over connection defaults.
+  if (args.connection.provider === "custom") {
+    applyParameterOverrides(connectionParams, "connection");
+    applyParameterOverrides(chatParams, "chat");
+  }
+  runtime.customParameters = mergeCustomParameters(
+    runtime.customParameters,
+    resolveManagedGenerationParameters(
+      args.managedParameterDefinitions,
+      connectionParams?.managedCustomParameters,
+      chatParams?.managedCustomParameters,
+    ),
+  );
+
   if (args.chatMode === "game") {
-    if (runtime.maxTokens < 16_384) forceParameters("game", { maxTokens: 16_384 });
+    if (args.connection.provider !== "custom" && runtime.maxTokens < 16_384)
+      forceParameters("game", { maxTokens: 16_384 });
     const capped = clampGenerationMaxOutputTokens({
       provider: args.connection.provider,
       model: args.connection.model,
@@ -206,7 +215,7 @@ export function resolveGenerationProviderRuntime(args: GenerationProviderRuntime
       : runtime.reasoningEffort === null
         ? "none"
         : (resolvedEffort ?? undefined);
-  const isClaudeNoSampling = isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
+  const isClaudeNoSampling = providerLower !== "custom" && isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
   if (isClaudeNoSampling) {
     forceParameters("provider", {
       temperature: undefined,
@@ -218,6 +227,7 @@ export function resolveGenerationProviderRuntime(args: GenerationProviderRuntime
   }
 
   const isClaudeTemperatureOnly =
+    providerLower !== "custom" &&
     !isClaudeNoSampling &&
     (/claude-(opus|sonnet)-4-[56]/.test(modelLower) || /claude-(opus|sonnet)-4\.[56]/.test(modelLower));
   if (isClaudeTemperatureOnly) {

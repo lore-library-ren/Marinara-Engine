@@ -7,7 +7,7 @@ Preserve these changes on future updates:
 - Native Cartesia Audio/TTS, Sonic 3.6, owned-voice discovery, and WAV output (commit `b4d041b0a`). Credentials and voice selections remain in local storage, outside Git.
 - OpenCode conversation identity, adapted from `5718f783d` on `fix/local-opencode-session`. Main chat, agents, summaries, and nested requests retain the persistent chat ID. Explicit session headers take precedence; cross-origin redirects strip the session header. Connection diagnostics without a chat use `marinara-connection-test:<connection-id>`; ordinary independent calls do not invent a session.
 
-The original `fix/local-opencode-session` branch remains intact, including its separate custom-provider parameter fixes. This restoration does not claim to port that entire older branch or unrelated UI feature branches.
+The original `fix/local-opencode-session` branch remains intact, including its separate custom-provider parameter fixes. Its custom-provider settings fix is now adapted on this branch too: saved connection settings override Game/Scene defaults, chat settings override connection defaults, and explicit raw custom parameters win last. Built-in provider rules and newer native/remote GLM compatibility remain in place. Unrelated UI feature branches have not been ported.
 
 Automatic Engine updates are disabled in this installation's local `.env`. Before a deliberate upstream update, back up local data and `.env`, preserve this branch, and port both fixes onto the intended release. Do not replace this branch with upstream or blindly run the older branch's rebase instructions. Keep personal data and credentials out of Git.
 

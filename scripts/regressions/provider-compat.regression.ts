@@ -283,9 +283,9 @@ try {
     enabledParameters: { reasoningEffort: true },
   });
   assert.equal(
-    "reasoning_effort" in (nanoGptRequestBody ?? {}),
-    false,
-    "local custom GLM 5.3 keeps the generic no-effort body for an active effort",
+    nanoGptRequestBody?.reasoning_effort,
+    "medium",
+    "local custom GLM receives the explicitly selected effort",
   );
   nanoGptRequestBody = null;
   await collectProviderOutput(customGateway, {
@@ -445,9 +445,9 @@ try {
   assert.equal(customParametersRequestBody.top_k, 44);
   assert.equal(customParametersRequestBody.min_p, 0.12);
   assert.equal(
-    "reasoning_effort" in customParametersRequestBody,
-    false,
-    "unknown custom models must not receive inherited reasoning effort",
+    customParametersRequestBody.reasoning_effort,
+    "high",
+    "custom models receive the selected effort regardless of model name",
   );
   assert.equal(customParametersRequestBody.verbosity, "low");
 
@@ -624,7 +624,7 @@ try {
   assert.equal(customParametersRequestBody.top_n_sigma, 1.5);
   assert.deepEqual(customParametersRequestBody.chat_template_kwargs, { enable_thinking: true });
   assert.equal(customParametersRequestBody.reasoning_effort, "high");
-  assert.equal("temperature" in customParametersRequestBody, false);
+  assert.equal(customParametersRequestBody.temperature, 1);
   assert.equal("top_p" in customParametersRequestBody, false);
 
   customParametersRequestBody = null;
@@ -647,8 +647,15 @@ try {
     },
   });
   assert.ok(customParametersRequestBody);
-  for (const key of ["temperature", "top_p", "top_k", "min_p", "frequency_penalty", "presence_penalty"]) {
-    assert.equal(key in customParametersRequestBody, false);
+  for (const [key, value] of Object.entries({
+    temperature: 0.7,
+    top_p: 0.8,
+    top_k: 44,
+    min_p: 0.25,
+    frequency_penalty: 0.5,
+    presence_penalty: 0.3,
+  })) {
+    assert.equal(customParametersRequestBody[key], value);
   }
 } finally {
   await new Promise<void>((resolve, reject) =>
@@ -697,12 +704,11 @@ try {
   );
   assert.deepEqual(
     localReasoningRequestBody.chat_template_kwargs,
-    { enable_thinking: false, use_jinja: true },
-    "llama.cpp needs enable_thinking=false to win over custom parameters while preserving sibling options",
+    { enable_thinking: true, use_jinja: true },
+    "explicit raw custom settings win over generated thinking controls",
   );
 
-  // Graded levels stay gated for off-catalog models: llama.cpp accepts them but
-  // treats every non-"none" value identically to sending nothing.
+  // Forward explicitly selected effort even for off-catalog custom models.
   localReasoningRequestBody = null;
   await localProvider.chatComplete([{ role: "user", content: "think hard" }], {
     model: "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive",
@@ -711,7 +717,7 @@ try {
     enabledParameters: { reasoningEffort: true },
   });
   assert.ok(localReasoningRequestBody);
-  assert.equal("reasoning_effort" in localReasoningRequestBody, false);
+  assert.equal(localReasoningRequestBody.reasoning_effort, "high");
   assert.equal("chat_template_kwargs" in localReasoningRequestBody, false);
 
   // The parameter's own send-switch still wins over everything.
@@ -841,7 +847,7 @@ assert.deepEqual(
     minP: 0.12,
     frequencyPenalty: 0.2,
     presencePenalty: -0.1,
-    reasoningEffort: "high",
+    reasoningEffort: "max",
     verbosity: "low",
     serviceTier: undefined,
     stop: ["END"],
@@ -1538,8 +1544,8 @@ assert.equal(resolveProviderReasoningEffort({ provider: "zai", model: "glm-5.3",
 assert.equal(resolveProviderReasoningEffort({ provider: "zai", model: "glm-5.3", reasoningEffort: undefined }), null);
 assert.equal(
   resolveProviderReasoningEffort({ provider: "custom", model: "glm-5.3", reasoningEffort: "maximum" }),
-  "high",
-  "a Custom connection is not promoted by the resolver",
+  "max",
+  "a Custom connection preserves the selected maximum effort",
 );
 assert.equal(findKnownModel("zai", "glm-5.3")?.context, 1000000);
 assert.equal(findKnownModel("zai", "glm-5.3-flash")?.maxOutput, 128000);
