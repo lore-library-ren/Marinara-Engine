@@ -63,6 +63,7 @@ export interface ConversationSummaryFailures {
 }
 
 interface GenerateMissingConversationSummariesOptions {
+  conversationId?: string;
   messages: ConversationSummaryMessage[];
   metadata: Record<string, unknown>;
   provider: BaseLLMProvider;
@@ -307,6 +308,7 @@ async function summarizeTranscript(
   userContent: string,
   timeoutMs: number,
   maxTokens = 4096,
+  conversationId?: string,
 ): Promise<DaySummaryEntry> {
   const result = await withTimeout(
     provider.chatComplete(
@@ -314,7 +316,7 @@ async function summarizeTranscript(
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
       ],
-      { model, temperature: 0.3, maxTokens },
+      { model, conversationId, temperature: 0.3, maxTokens },
     ),
     timeoutMs,
   );
@@ -327,6 +329,7 @@ async function summarizeDayBucket(
   bucket: ConversationSummaryDayBucket,
   timeoutMs: number,
   maxTokens: number,
+  conversationId?: string,
 ): Promise<DaySummaryEntry> {
   const transcriptLines = bucket.msgs.map((message) => `${message.author}: ${message.content}`);
   const chunks = chunkTranscriptLines(transcriptLines, DAILY_TRANSCRIPT_CHUNK_CHARS);
@@ -339,6 +342,7 @@ async function summarizeDayBucket(
       chunks[0] ?? "",
       timeoutMs,
       maxTokens,
+      conversationId,
     );
   }
 
@@ -351,6 +355,7 @@ async function summarizeDayBucket(
       chunks[i]!,
       timeoutMs,
       maxTokens,
+      conversationId,
     );
     if (partial.summary || partial.keyDetails.length > 0) partials.push(partial);
   }
@@ -374,6 +379,7 @@ async function summarizeDayBucket(
     combinedInput,
     timeoutMs,
     maxTokens,
+    conversationId,
   );
 }
 
@@ -490,7 +496,14 @@ export async function generateMissingConversationSummaries(
 
   for (const bucket of bucketsToProcess) {
     try {
-      const entry = await summarizeDayBucket(options.provider, options.model, bucket, timeoutMs, maxTokens);
+      const entry = await summarizeDayBucket(
+        options.provider,
+        options.model,
+        bucket,
+        timeoutMs,
+        maxTokens,
+        options.conversationId,
+      );
       if (entry.summary || entry.keyDetails.length > 0) {
         daySummaries[bucket.date] = entry;
         newlyGeneratedDays[bucket.date] = entry;
@@ -555,6 +568,7 @@ export async function generateMissingConversationSummaries(
         dayBlocks.join("\n\n"),
         timeoutMs,
         maxTokens,
+        options.conversationId,
       );
       if (entry.summary || entry.keyDetails.length > 0) {
         weekSummaries[weekKey] = entry;

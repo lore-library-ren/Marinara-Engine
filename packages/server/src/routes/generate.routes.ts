@@ -6310,6 +6310,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
             const result = await withLlmRequestTimeout(chatGenerationTimeoutMs, () =>
               selectorProvider.chatComplete(selectionPrompt, {
+                conversationId: input.chatId,
                 model: selectorModel,
                 ...(selectorPolicy.suppressModelParameters
                   ? {}
@@ -7076,6 +7077,7 @@ export async function generateRoutes(app: FastifyInstance) {
           };
 
           const textChatOptions: ChatOptions = {
+            conversationId: input.chatId,
             ...(advancedMemoryEnabled ? { preserveContext: true } : {}),
             model: conn.model,
             temperature,
@@ -7180,6 +7182,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   );
                   result = await withLlmRequestTimeout(chatGenerationTimeoutMs, () =>
                     provider.chatComplete!(loopMessages, {
+                      conversationId: input.chatId,
                       model: conn.model,
                       preserveContext: advancedMemoryEnabled,
                       temperature,
@@ -7502,6 +7505,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 logPromptSentToModel(loopMessages, "Prompt sent to model (final tool follow-up)");
                 const finalResult = await withLlmRequestTimeout(chatGenerationTimeoutMs, () =>
                   provider.chatComplete!(loopMessages, {
+                    conversationId: input.chatId,
                     model: conn.model,
                     preserveContext: advancedMemoryEnabled,
                     temperature,
@@ -9464,6 +9468,7 @@ export async function generateRoutes(app: FastifyInstance) {
               },
             ],
             {
+              conversationId: input.chatId,
               model: summaryModel,
               ...summaryTemperatureOptions,
               maxTokens: summaryMaxTokens,

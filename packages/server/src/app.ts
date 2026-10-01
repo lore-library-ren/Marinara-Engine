@@ -1,3 +1,4 @@
+import { withConversationContext } from "./services/llm/conversation-context.js";
 // ──────────────────────────────────────────────
 // Fastify App Factory
 // ──────────────────────────────────────────────
@@ -208,8 +209,8 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // Keep fallback reporting attached to the originating request even when
   // generation passes through nested services. Streamed routes emit an SSE
   // event; ordinary requests expose a response header consumed by the client.
-  app.addHook("preHandler", (_request, reply, done) => {
-    runWithGenerationFallbackNotifier(createReplyFallbackNotifier(reply), done);
+  app.addHook("preHandler", (request, reply, done) => {
+    withConversationContext(request, () => runWithGenerationFallbackNotifier(createReplyFallbackNotifier(reply), done));
   });
 
   // ── Security headers ──

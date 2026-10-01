@@ -601,6 +601,7 @@ const CROSS_ORIGIN_REDIRECT_STRIPPED_HEADERS = [
   "xi-api-key",
   "x-api-key",
   "api-key",
+  "x-opencode-session",
   "content-type",
   "content-length",
 ];

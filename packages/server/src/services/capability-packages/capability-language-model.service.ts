@@ -37,6 +37,7 @@ export function createCapabilityLanguageModelHost(db: DB): CapabilityLanguageMod
         options: CapabilityLanguageModelCompletionOptions = {},
       ) {
         const result = await provider.chatComplete(messages as ChatMessage[], {
+          conversationId: options.conversationId,
           model,
           temperature: options.temperature,
           maxTokens: options.maxTokens,

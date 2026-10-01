@@ -84,6 +84,7 @@ export async function completeAgentCall(
       logger.warn(error, "Could not send scene-check tracker prompt diagnostics");
     }
   }
+  options = { ...options, conversationId: options.conversationId ?? context.chatId };
   if (!context.agentProgress && !sceneCheck) return provider.chatComplete(messages, options);
   const startedAt = Date.now();
   const progress: AgentTaskProgress = {

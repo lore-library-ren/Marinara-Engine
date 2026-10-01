@@ -2002,6 +2002,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         if (advancedContext)
           await advancedMemoryService!.validatePrepared(chatId, advancedMemorySourceMessages, advancedContext.receipt);
         const result = await provider.chatComplete(providerMessages as any, {
+          conversationId: chatId,
           preserveContext: Boolean(advancedContext),
           model: conn.model,
           temperature,
@@ -2070,6 +2071,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       if (advancedContext)
         await advancedMemoryService!.validatePrepared(chatId, advancedMemorySourceMessages, advancedContext.receipt);
       const result = await provider.chatComplete(providerMessages as any, {
+        conversationId: chatId,
         preserveContext: Boolean(advancedContext),
         model: conn.model,
         temperature,

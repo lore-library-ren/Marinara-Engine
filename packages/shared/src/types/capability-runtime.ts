@@ -131,6 +131,8 @@ export interface CapabilityLanguageModelMessage {
 }
 
 export interface CapabilityLanguageModelCompletionOptions {
+  /** Persistent parent conversation ID for calls made outside the request lifecycle. */
+  conversationId?: string;
   temperature?: number;
   maxTokens?: number;
   debugMode?: boolean;

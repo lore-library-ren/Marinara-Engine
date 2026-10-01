@@ -2677,6 +2677,7 @@ export class ProfessorMariWorkspaceService {
         permissionsMode,
       );
       const baseOptions: ChatOptions = {
+        conversationId: args.chatId,
         ...this.baseChatOptions(connection, controller.signal, (delta) => {
           thinkingText += delta;
           appendTraceThinking(workspaceTrace, delta);

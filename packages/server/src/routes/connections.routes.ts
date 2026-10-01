@@ -1,3 +1,4 @@
+import { getCurrentConversationId } from "../services/llm/conversation-context.js";
 import { cartesiaHeaders, CARTESIA_DEFAULT_MODEL } from "../services/connections/cartesia-tts.js";
 // ──────────────────────────────────────────────
 // Routes: Connections
@@ -1568,6 +1569,7 @@ export async function connectionsRoutes(app: FastifyInstance) {
       );
       let fullResponse = "";
       const generation = provider.chat([{ role: "user", content: "hi" }], {
+        conversationId: getCurrentConversationId() ?? `marinara-connection-test:${conn.id}`,
         model,
         ...storedOptions,
         temperature: storedOptions.temperature ?? 0.7,

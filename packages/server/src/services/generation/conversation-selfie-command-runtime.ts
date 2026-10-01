@@ -226,6 +226,7 @@ async function generateSelfie(
       },
     ],
     {
+      conversationId: args.chatId,
       model: promptRuntime.model,
       ...(promptRuntime.suppressModelParameters
         ? {}

@@ -1,3 +1,4 @@
+import { getCurrentConversationId } from "../services/llm/conversation-context.js";
 // ──────────────────────────────────────────────
 // Routes: Game Mode
 // ──────────────────────────────────────────────
@@ -3224,6 +3225,7 @@ function gameGenOptions(
     const enabledParameters = mergeEnabledParameters(parameters?.enabledParameters, overrides.enabledParameters);
     const stripped: ChatOptions = {
       model,
+      conversationId: overrides.conversationId ?? getCurrentConversationId(),
       suppressModelParameters: true,
     };
     if (overrides.stream !== undefined) stripped.stream = overrides.stream;
@@ -3252,6 +3254,7 @@ function gameGenOptions(
     reasoningEffort: "maximum",
   });
   const base: ChatOptions = {
+    conversationId: getCurrentConversationId(),
     model,
     maxTokens: 8192,
     verbosity: "high",

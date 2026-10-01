@@ -201,6 +201,7 @@ export function buildIllustratorBackgroundPlanSystemPrompt(styleInstruction?: st
 }
 
 async function writeIllustratorBackgroundPlan(args: {
+  chatId: string;
   illustratorAgent: ResolvedAgent;
   chatName?: string | null;
   currentBackground?: string | null;
@@ -222,6 +223,7 @@ async function writeIllustratorBackgroundPlan(args: {
 
   const callPromptWriter = async (messages: Array<{ role: "system" | "user" | "assistant"; content: string }>) =>
     args.illustratorAgent.provider.chatComplete(messages, {
+      conversationId: args.chatId,
       model: args.illustratorAgent.model,
       temperature: 0.35,
       maxTokens: Math.min(
