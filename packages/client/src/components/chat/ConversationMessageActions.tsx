@@ -1,3 +1,4 @@
+import { ConversationMessageTTS } from "./ConversationMessageTTS";
 // ──────────────────────────────────────────────
 // Message action row — follows the message content
 // ──────────────────────────────────────────────
@@ -24,7 +25,8 @@ import { MESSAGE_ACTION_ICON_SIZE } from "./MessageActionButton";
 import { ReactionAddButton } from "./ReactionAddButton";
 
 export interface ConversationMessageActionsProps {
-  message: Pick<Message, "id" | "chatId" | "content">;
+  message: Pick<Message, "id" | "chatId" | "content"> & { characterId?: string | null };
+  charIdByName?: Map<string, string> | null;
   name: string;
   isUser: boolean;
   // Visibility
@@ -61,6 +63,7 @@ export interface ConversationMessageActionsProps {
 
 export function ConversationMessageActions({
   message,
+  charIdByName,
   name,
   isUser,
   showActions,
@@ -108,6 +111,7 @@ export function ConversationMessageActions({
         onClick={onCopy}
         title={localizeUi("lorebook.editor.batch.copy")}
       />
+      {!thinkingOnly && <ConversationMessageTTS message={message} name={name} charIdByName={charIdByName} />}
       {!thinkingOnly && <ReplyToMessageButton message={message} name={name} />}
       {onPickReaction && <ReactionAddButton onPick={onPickReaction} />}
       <MsgAction

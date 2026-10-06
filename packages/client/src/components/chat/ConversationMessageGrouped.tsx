@@ -439,6 +439,7 @@ export function ConversationMessageGrouped({
       {/* Action bar */}
       {(!hideActions || hasReasoning) && (
         <ConversationMessageActions
+          charIdByName={ctx.charIdByName}
           message={message}
           name={ctx.displayName}
           isUser={false}

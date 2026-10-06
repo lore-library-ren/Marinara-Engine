@@ -4,6 +4,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+- Added manual speak/stop controls to Conversation message actions, using the existing TTS voice settings and playback service.
+
 - Roleplay chats can arm an active `[spicy]` custom text-rewrite agent for the next reply with an **Add spice** button, without adding a marker to the user's message.
 
 - Restored custom API parameter choices across chat and diagnostics: saved reasoning, sampling, and token settings survive model-name and Game/Scene defaults, while chat overrides and raw custom parameters retain priority.

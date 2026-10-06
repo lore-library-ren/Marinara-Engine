@@ -1155,6 +1155,7 @@ export const ConversationMessage = memo(function ConversationMessage({
           {reactionRow}
           {(!hideActions || (hasReasoning && !isUser)) && (
             <ConversationMessageActions
+              charIdByName={charIdByName}
               message={message}
               name={displayName}
               isUser={isUser}
