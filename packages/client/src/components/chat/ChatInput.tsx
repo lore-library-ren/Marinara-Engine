@@ -13,6 +13,7 @@ import {
   Languages,
   Loader2,
   FileText,
+  Flame,
   Sparkles,
   WandSparkles,
   Swords,
@@ -29,6 +30,7 @@ import { useGenerate } from "../../hooks/use-generate";
 import { useCommitSpatialOwnerTurn } from "../../hooks/use-spatial-context";
 import { useApplyRegex } from "../../hooks/use-apply-regex";
 import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
+import { useAgentConfigs, type AgentConfigRow } from "../../hooks/use-agents";
 import { useCreateMessage, useDeleteMessage, useUpdateMessageExtra, chatKeys } from "../../hooks/use-chats";
 import { useConnections } from "../../hooks/use-connections";
 import { characterKeys } from "../../hooks/use-characters";
@@ -235,6 +237,7 @@ export const ChatInput = memo(function ChatInput({
   const [pushStoryMode, setPushStoryMode] = useState<NarrativeDirectorMode | null>(null);
   const [pushStoryMenuOpen, setPushStoryMenuOpen] = useState(false);
   const pushStoryMenuRef = useRef<HTMLDivElement>(null);
+  const [spicyRewriteArmedChatId, setSpicyRewriteArmedChatId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [charPickerOpen, setCharPickerOpen] = useState(false);
   const charPickerBtnRef = useRef<HTMLButtonElement>(null);
@@ -352,13 +355,38 @@ export const ChatInput = memo(function ChatInput({
         : [],
     [chatMetadata.activeAgentIds],
   );
+  const { data: agentConfigs = [] } = useAgentConfigs(mode === "roleplay" && !!activeChatId);
+  const spicyRewriteAgentActive = useMemo(() => {
+    if (mode !== "roleplay" || chatMetadata.enableAgents !== true || activeAgentIds.length === 0) return false;
+    return agentConfigs.some((agent: AgentConfigRow) => {
+      if (!agent.type.startsWith("custom-") || !activeAgentIds.includes(agent.type) || agent.phase !== "post_processing") {
+        return false;
+      }
+      let settings: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(agent.settings) as unknown;
+        settings = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+      } catch {
+        return false;
+      }
+      const keywords = Array.isArray(settings.activationKeywords) ? settings.activationKeywords : [];
+      return (
+        settings.resultType === "text_rewrite" &&
+        keywords.some((keyword) => typeof keyword === "string" && keyword.trim().toLocaleLowerCase() === "[spicy]")
+      );
+    });
+  }, [activeAgentIds, agentConfigs, chatMetadata.enableAgents, mode]);
   const narrativeDirectorActive =
     mode === "roleplay" && chatMetadata.enableAgents === true && activeAgentIds.includes("director");
   const hierarchicalMapsActive =
     mode === "roleplay" && chatMetadata.enableAgents === true && activeAgentIds.includes("hierarchical-maps");
   const combatActionActive =
     mode === "roleplay" && combatAgentEnabled === true && typeof onStartEncounter === "function";
-  const showRoleplayAgentActions = narrativeDirectorActive || combatActionActive;
+  const spicyRewriteArmed = !!activeChatId && spicyRewriteArmedChatId === activeChatId;
+  const showRoleplayAgentActions = narrativeDirectorActive || spicyRewriteAgentActive || combatActionActive;
+  useEffect(() => {
+    setSpicyRewriteArmedChatId(null);
+  }, [activeChatId, spicyRewriteAgentActive]);
   const consumeNarrativeDirectorMode = useCallback((): NarrativeDirectorMode | undefined => {
     if (!pushStoryMode || !narrativeDirectorActive) return undefined;
     setPushStoryMode(null);
@@ -367,15 +395,32 @@ export const ChatInput = memo(function ChatInput({
   const generateWithNarrativeDirector = useCallback(
     (params: Parameters<typeof generate>[0]) => {
       const directorMode = consumeNarrativeDirectorMode();
-      if (!directorMode) return generate(params);
+      const spiceArmed =
+        spicyRewriteAgentActive && !!activeChatId && params.chatId === activeChatId && spicyRewriteArmedChatId === activeChatId;
+      if (spiceArmed) setSpicyRewriteArmedChatId(null);
+      if (!directorMode && !spiceArmed) return generate(params);
       // Re-arm the chosen mode if the push never reaches a response, so a
       // failed generation does not silently swallow the user's selection.
-      return generate({ ...params, narrativeDirectorMode: directorMode }).catch((error) => {
-        setPushStoryMode((current) => current ?? directorMode);
-        throw error;
-      });
+      return generate({
+        ...params,
+        ...(directorMode ? { narrativeDirectorMode: directorMode } : {}),
+        ...(spiceArmed ? { forceSpicyRewrite: true } : {}),
+      }).then(
+        (result) => {
+          if (result === false) {
+            if (directorMode) setPushStoryMode((current) => current ?? directorMode);
+            if (spiceArmed) setSpicyRewriteArmedChatId((current) => current ?? params.chatId);
+          }
+          return result;
+        },
+        (error) => {
+          if (directorMode) setPushStoryMode((current) => current ?? directorMode);
+          if (spiceArmed) setSpicyRewriteArmedChatId((current) => current ?? params.chatId);
+          throw error;
+        },
+      );
     },
-    [consumeNarrativeDirectorMode, generate],
+    [activeChatId, consumeNarrativeDirectorMode, generate, spicyRewriteAgentActive, spicyRewriteArmedChatId],
   );
 
   const syncInputState = useCallback(
@@ -847,6 +892,17 @@ export const ChatInput = memo(function ChatInput({
     }
     setPushStoryMenuOpen((open) => !open);
   }, [isInputBusy, narrativeDirectorActive, pushStoryMode, localizeUi]);
+
+  const handleSpicyRewriteClick = useCallback(() => {
+    if (!activeChatId || !spicyRewriteAgentActive || isInputBusy) return;
+    if (spicyRewriteArmed) {
+      setSpicyRewriteArmedChatId(null);
+      toast.info(localizeUi("ui.chat.chatinput.spicyRewriteDisarmed"));
+      return;
+    }
+    setSpicyRewriteArmedChatId(activeChatId);
+    toast.success(localizeUi("ui.chat.chatinput.theNextReplyWillBeSpicedUp"));
+  }, [activeChatId, isInputBusy, localizeUi, spicyRewriteAgentActive, spicyRewriteArmed]);
 
   const handleArmPushStory = useCallback(
     (mode: NarrativeDirectorMode) => {
@@ -1902,6 +1958,32 @@ export const ChatInput = memo(function ChatInput({
 
       {showRoleplayAgentActions && (
         <div className="flex flex-wrap justify-center gap-2 py-1">
+          {spicyRewriteAgentActive && (
+            <button
+              type="button"
+              onClick={handleSpicyRewriteClick}
+              disabled={isInputBusy}
+              aria-pressed={spicyRewriteArmed}
+              className={cn(
+                ROLEPLAY_AGENT_ACTION_BUTTON_CLASS,
+                spicyRewriteArmed
+                  ? "bg-foreground/10 text-foreground ring-1 ring-foreground/25"
+                  : "text-foreground/50 hover:bg-foreground/10 hover:text-foreground/80",
+              )}
+              title={
+                spicyRewriteArmed
+                  ? localizeUi("ui.chat.chatinput.disarmSpicyRewrite")
+                  : localizeUi("ui.chat.chatinput.armSpicyRewriteForNextReply")
+              }
+            >
+              <Flame size="0.875rem" />
+              <span>
+                {spicyRewriteArmed
+                  ? localizeUi("ui.chat.chatinput.spiceArmed")
+                  : localizeUi("ui.chat.chatinput.addSpice")}
+              </span>
+            </button>
+          )}
           {narrativeDirectorActive && (
             <div ref={pushStoryMenuRef} className="relative">
               <button

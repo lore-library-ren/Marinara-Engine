@@ -217,7 +217,7 @@ import {
   resolveAgentResultType,
   type AgentExecConfig,
 } from "../services/agents/agent-executor.js";
-import { matchCustomAgentActivation } from "./generate/agent-activation.js";
+import { hasSpicyActivationKeyword, matchCustomAgentActivation } from "./generate/agent-activation.js";
 import { listCharacterSprites } from "../services/game/sprite.service.js";
 import {
   generateIllustratorSceneBackground,
@@ -9211,6 +9211,13 @@ export async function generateRoutes(app: FastifyInstance) {
         const inactivePostProcessingAgentIds = new Set<string>();
         for (const agent of resolvedAgents) {
           if (agent.phase !== "post_processing" || builtInAgentTypes.has(agent.type)) continue;
+          if (
+            input.forceSpicyRewrite === true &&
+            resolveAgentResultType(agent) === "text_rewrite" &&
+            hasSpicyActivationKeyword(agent.settings)
+          ) {
+            continue;
+          }
           const activation = matchCustomAgentActivation(agent.settings, postActivationMessages);
           if (!activation.configured || activation.matched) continue;
           inactivePostProcessingAgentIds.add(agent.id);

@@ -4,6 +4,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+- Roleplay chats can arm an active `[spicy]` custom text-rewrite agent for the next reply with an **Add spice** button, without adding a marker to the user's message.
+
 - Restored custom API parameter choices across chat and diagnostics: saved reasoning, sampling, and token settings survive model-name and Game/Scene defaults, while chat overrides and raw custom parameters retain priority.
 
 - Restored the local OpenCode session-header fix across chat, agents, summaries, and connection diagnostics after updating to 2.4.6.

@@ -935,6 +935,7 @@ export interface MessageExtra {
     generationGuide?: string | null;
     generationGuideSource?: GenerationGuideSource | null;
     narrativeDirectorMode?: "natural" | "random" | null;
+    forceSpicyRewrite?: boolean;
     impersonatePresetId?: string | null;
     impersonateConnectionId?: string | null;
     impersonateBlockAgents?: boolean;
@@ -1044,6 +1045,8 @@ export interface GenerateRequest {
   attachments?: MessageAttachment[];
   /** One-shot Narrative Director mode for this generation, if the user armed Push Story. */
   narrativeDirectorMode?: "natural" | "random" | null;
+  /** One-shot custom Text Rewrite activation when the user armed Add spice. */
+  forceSpicyRewrite?: boolean;
 }
 
 /** An SSE event from the generation stream. */

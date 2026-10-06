@@ -40,6 +40,12 @@ export function normalizeAgentActivationScanDepth(value: unknown): number {
   return Math.max(1, Math.min(MAX_CUSTOM_AGENT_ACTIVATION_SCAN_DEPTH, Math.floor(parsed)));
 }
 
+export function hasSpicyActivationKeyword(settings: Record<string, unknown>): boolean {
+  return normalizeAgentActivationKeywords(settings.activationKeywords).some(
+    (keyword) => keyword.toLocaleLowerCase() === "[spicy]",
+  );
+}
+
 export function matchCustomAgentActivation(
   settings: Record<string, unknown>,
   messages: ActivationScanMessage[],

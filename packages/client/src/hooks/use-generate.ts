@@ -1230,6 +1230,7 @@ export function useGenerate() {
       forCharacterId?: string;
       skipPresenceDelay?: boolean;
       narrativeDirectorMode?: "natural" | "random";
+      forceSpicyRewrite?: boolean;
       generationGuide?: string;
       generationGuideSource?: "narrator" | "guide" | "game_start";
       agentInjectionOverrides?: Array<{ agentType: string; agentName?: string; text: string }>;

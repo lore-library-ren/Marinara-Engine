@@ -8,6 +8,7 @@ export interface GenerationReplay {
   generationGuide?: string;
   generationGuideSource?: GenerationReplayGuideSource;
   narrativeDirectorMode?: "natural" | "random";
+  forceSpicyRewrite?: true;
   impersonatePresetId?: string | null;
   impersonateConnectionId?: string | null;
   impersonateBlockAgents?: boolean;
@@ -20,6 +21,7 @@ export interface GenerationReplayInput {
   generationGuide?: string | null;
   generationGuideSource?: GenerationReplayGuideSource | null;
   narrativeDirectorMode?: "natural" | "random" | null;
+  forceSpicyRewrite?: boolean;
   impersonatePresetId?: string | null;
   impersonateConnectionId?: string | null;
   impersonateBlockAgents?: boolean;
@@ -58,6 +60,7 @@ export function buildGenerationReplay(input: GenerationReplayInput): GenerationR
 
   const narrativeDirectorMode = asNarrativeDirectorMode(input.narrativeDirectorMode);
   if (narrativeDirectorMode) replay.narrativeDirectorMode = narrativeDirectorMode;
+  if (input.forceSpicyRewrite === true) replay.forceSpicyRewrite = true;
 
   if (input.impersonate === true) {
     replay.impersonate = true;
@@ -88,6 +91,7 @@ export function normalizeGenerationReplay(value: unknown): GenerationReplay | nu
     generationGuide: asNonEmptyString(raw.generationGuide),
     generationGuideSource: asGuideSource(raw.generationGuideSource),
     narrativeDirectorMode: asNarrativeDirectorMode(raw.narrativeDirectorMode),
+    forceSpicyRewrite: raw.forceSpicyRewrite === true,
     impersonatePresetId: asTrimmedNonEmptyString(raw.impersonatePresetId),
     impersonateConnectionId: asTrimmedNonEmptyString(raw.impersonateConnectionId),
     impersonateBlockAgents: raw.impersonateBlockAgents === true,
@@ -155,6 +159,11 @@ export function applyGenerationReplayToRegenerateInput(
 
   if (!asNarrativeDirectorMode(input.narrativeDirectorMode) && replay.narrativeDirectorMode) {
     input.narrativeDirectorMode = replay.narrativeDirectorMode;
+    applied = true;
+  }
+
+  if (input.forceSpicyRewrite !== true && replay.forceSpicyRewrite === true) {
+    input.forceSpicyRewrite = true;
     applied = true;
   }
 
