@@ -13,6 +13,7 @@ import {
   type LorebookCategory,
   type QuoteFormat,
   type ScenePromptPreferences,
+  type ScenePackageOrigin,
 } from "@marinara-engine/shared";
 import type { LegacyNoodleNavigationState as NoodleNavigationState } from "../lib/legacy-noodle-navigation";
 import { isCssGradient, MARINARA_GRADIENT_PRESET, RAINBOW_GRADIENT_PRESET } from "../lib/css-colors";
@@ -23,6 +24,7 @@ import { resetProfessorMariNavigator } from "../lib/professor-mari-navigation";
 import { DEFAULT_APP_LANGUAGE, type AppLanguage } from "../localization/locale-types";
 import { deferEditorLeave } from "../lib/editor-leave";
 import { UI_PERSISTENCE } from "../lib/ui-persistence";
+import { normalizeChatWidgetFont } from "../lib/font-family";
 import type { ChatWizardDefaults, ChatWizardMode } from "../lib/chat-wizard-defaults";
 
 export type Panel =
@@ -67,6 +69,25 @@ function normalizeConnectionPanelSort(value: unknown): ConnectionPanelSort {
 }
 type FontSize = 12 | 14 | 16 | 17 | 19 | 22 | 26 | 30 | 34;
 export type VisualTheme = "default" | "sillytavern";
+export type ChatWidgetPreset = "default" | "dottore" | "mari";
+export type ChatWidgetShape = "preset" | "rounded" | "square" | "cut-corner" | "arched";
+
+export function normalizeChatWidgetPreset(value: unknown): ChatWidgetPreset {
+  return value === "dottore" || value === "mari" ? value : "default";
+}
+
+export function normalizeChatWidgetShape(value: unknown): ChatWidgetShape {
+  return value === "rounded" || value === "square" || value === "cut-corner" || value === "arched" ? value : "preset";
+}
+
+/** No override preserves the existing desktop, phone and custom-theme sizes. */
+export function normalizeChatWidgetButtonSize(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(32, Math.min(96, Math.round(value))) : null;
+}
+
+export function normalizeChatWidgetColor(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
 export type ConversationMessageStyle = "classic" | "bubble";
 export type ConversationAvatarShape = "circle" | "square";
 export type TrackerPanelSide = "left" | "right";
@@ -88,11 +109,24 @@ export interface EchoChamberSize {
 }
 export type UserStatus = "active" | "idle" | "dnd" | "invisible";
 export type RoleplayAvatarStyle = "none" | "circles" | "rectangles" | "panel";
+export type RoleplayChatPosition = "left" | "center" | "right";
+
+/** Stale or unknown synced values fall back to the centred layout. */
+export function normalizeRoleplayChatPosition(value: unknown): RoleplayChatPosition {
+  return value === "left" || value === "right" ? value : "center";
+}
 export type GameDialogueDisplayMode = "classic" | "stacked";
 /** How much of the chat list shows each chat's background as a row banner. */
 export type ChatListBackgroundMode = "hover" | "always" | "off";
 export type SummaryPopoverSourceMode = "last" | "range";
 export const DEFAULT_ROLEPLAY_BACKGROUND_URL = "/api/backgrounds/file/Black.jpg";
+const DEFAULT_CONVERSATION_BACKGROUND_IMAGE_OPACITY = 45;
+
+export function normalizeConversationBackgroundImageOpacity(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(100, Math.round(value)))
+    : DEFAULT_CONVERSATION_BACKGROUND_IMAGE_OPACITY;
+}
 export interface FloatingWidgetPosition {
   x: number;
   y: number;
@@ -180,6 +214,8 @@ function normalizeEchoChamberSides(value: unknown): Record<string, EchoChamberSi
 
 interface ImmediateUiStorageSnapshot {
   customCursorEnabled: boolean | undefined;
+  chatSettingsMoveTipDismissed: boolean | undefined;
+  chatWindowIntroDismissed: boolean | undefined;
   echoChamberSides: string;
   echoChamberSizes: string;
 }
@@ -188,6 +224,8 @@ function readImmediateUiStorageSnapshot(value: string | null): ImmediateUiStorag
   if (!value) {
     return {
       customCursorEnabled: undefined,
+      chatSettingsMoveTipDismissed: undefined,
+      chatWindowIntroDismissed: undefined,
       echoChamberSides: "{}",
       echoChamberSizes: "{}",
     };
@@ -197,6 +235,8 @@ function readImmediateUiStorageSnapshot(value: string | null): ImmediateUiStorag
     const parsed = JSON.parse(value) as {
       state?: {
         customCursorEnabled?: unknown;
+        chatSettingsMoveTipDismissed?: unknown;
+        chatWindowIntroDismissed?: unknown;
         echoChamberSideByChatId?: unknown;
         echoChamberSizeByChatId?: unknown;
       };
@@ -204,12 +244,20 @@ function readImmediateUiStorageSnapshot(value: string | null): ImmediateUiStorag
     return {
       customCursorEnabled:
         typeof parsed.state?.customCursorEnabled === "boolean" ? parsed.state.customCursorEnabled : undefined,
+      chatSettingsMoveTipDismissed:
+        typeof parsed.state?.chatSettingsMoveTipDismissed === "boolean"
+          ? parsed.state.chatSettingsMoveTipDismissed
+          : undefined,
+      chatWindowIntroDismissed:
+        typeof parsed.state?.chatWindowIntroDismissed === "boolean" ? parsed.state.chatWindowIntroDismissed : undefined,
       echoChamberSides: JSON.stringify(normalizeEchoChamberSides(parsed.state?.echoChamberSideByChatId)),
       echoChamberSizes: JSON.stringify(normalizeEchoChamberSizes(parsed.state?.echoChamberSizeByChatId)),
     };
   } catch {
     return {
       customCursorEnabled: undefined,
+      chatSettingsMoveTipDismissed: undefined,
+      chatWindowIntroDismissed: undefined,
       echoChamberSides: "{}",
       echoChamberSizes: "{}",
     };
@@ -221,6 +269,8 @@ function shouldFlushUiStorageImmediately(previousValue: string | null, nextValue
   const next = readImmediateUiStorageSnapshot(nextValue);
   return (
     previous.customCursorEnabled !== next.customCursorEnabled ||
+    previous.chatSettingsMoveTipDismissed !== next.chatSettingsMoveTipDismissed ||
+    previous.chatWindowIntroDismissed !== next.chatWindowIntroDismissed ||
     previous.echoChamberSides !== next.echoChamberSides ||
     previous.echoChamberSizes !== next.echoChamberSizes
   );
@@ -583,6 +633,7 @@ interface UIState {
   rightPanelWidth: number;
   rightPanel: Panel;
   trackerPanelEnabled: boolean;
+  /** This chat uses the Tracker Panel; its runtime visibility lives in the floating-window store. */
   trackerPanelOpen: boolean;
   trackerPanelOpenByChatId: Record<string, boolean>;
   trackerPanelSide: TrackerPanelSide;
@@ -614,10 +665,14 @@ interface UIState {
   defaultRoleplayBackground: string;
   /** Native blur applied to selected chat/game background images, in px. */
   chatBackgroundBlur: number;
+  /** Persisted opacity applied to conversation background images, as a percentage. */
+  conversationBackgroundImageOpacity: number;
   /** When set, the main area shows the full-page character editor instead of chat */
   characterDetailId: string | null;
   /** When set, the main area shows the full-page lorebook editor instead of chat */
   lorebookDetailId: string | null;
+  /** In-app clipboard, intentionally not persisted or synced between devices. */
+  lorebookLinkClipboard: { characterIds: string[]; personaIds: string[] } | null;
   /** When set, the main area shows the full-page preset editor instead of chat */
   presetDetailId: string | null;
   /** One-shot tab the preset editor should open to. */
@@ -646,6 +701,8 @@ interface UIState {
   characterDetailInitialTab: string | null;
   /** One-shot tab the lorebook editor should open to. */
   lorebookDetailInitialTab: string | null;
+  /** One-shot entry the lorebook editor should open expanded. */
+  lorebookDetailInitialEntryId: string | null;
   /** One-shot tab the persona editor should open to. */
   personaDetailInitialTab: string | null;
   /** When true, the main area shows the browser */
@@ -722,6 +779,16 @@ interface UIState {
   chatFontSize: number;
   /** Custom font family name (empty = default Inter) */
   fontFamily: string;
+  chatWidgetPreset: ChatWidgetPreset;
+  chatWidgetFont: string;
+  chatWidgetShape: ChatWidgetShape;
+  chatWidgetButtonSize: number | null;
+  chatWidgetBorderColor: string;
+  chatWidgetBackgroundColor: string;
+  chatWidgetTextColor: string;
+  chatWidgetApplyFont: boolean;
+  chatWidgetApplyShape: boolean;
+  chatWidgetApplyColors: boolean;
   enableStreaming: boolean;
   debugMode: boolean;
   /** When true, warn when an agent uses the configured default connection. */
@@ -759,6 +826,7 @@ interface UIState {
   queueImageGenerationRequests: boolean;
   /** When true, generated image prompts are shown for review before supported provider calls are sent. */
   reviewImagePromptsBeforeSend: boolean;
+  autoSaveGeneratedImagesToGalleries: boolean;
   imageBackgroundWidth: number;
   imageBackgroundHeight: number;
   imageIllustrationWidth: number;
@@ -785,6 +853,8 @@ interface UIState {
   /** When true, character cards are available in Persona pickers. */
   showCharactersInPersonaPickers: boolean;
   guideGenerations: boolean;
+  /** When true, guided regeneration leaves its guidance in the composer instead of clearing it. */
+  keepGuidanceAfterRegenerate: boolean;
   showQuickRepliesMenu: boolean;
   showQuickReplyPostOnly: boolean;
   showQuickReplyGuide: boolean;
@@ -796,6 +866,8 @@ interface UIState {
   confirmBeforeDelete: boolean;
   /** When true, chat exports include saved thinking/reasoning metadata. */
   includeReasoningInExports: boolean;
+  /** When true, chat exports include private message notes. */
+  includePrivateNotesInExports: boolean;
   /** Number of messages to load per page (0 = load all) */
   messagesPerPage: number;
   /** Bold quoted dialogue in chat messages; color highlighting can still remain when this is off */
@@ -852,6 +924,8 @@ interface UIState {
   summaryPopoverSettings: SummaryPopoverSettings;
   /** Last-used preferences for generating character/user-initiated roleplay scenes. */
   scenePromptPreferences: ScenePromptPreferences;
+  /** A package thread the Home browser should open once: where a scene came from. Not persisted. */
+  sceneOriginFocus: ScenePackageOrigin | null;
 
   // ── Text Appearance ──
   /** Color for chat message text (empty = theme default) */
@@ -882,6 +956,10 @@ interface UIState {
   roleplaySpriteScale: number;
   /** Default presentation for Roleplay chats without a saved choice. */
   roleplayDisplayStyle: "classic" | "visual-novel";
+  /** Where the Roleplay messages and input sit on wide screens. Phones always use the full width. */
+  roleplayChatPosition: RoleplayChatPosition;
+  roleplayVnAutoPlay: boolean;
+  roleplayVnAutoPlayDelay: number;
   roleplayVnPortraitScale: number;
   roleplayVnSpriteScale: number;
   /** Scale multiplier for Game mode VN dialogue portraits. */
@@ -954,6 +1032,10 @@ interface UIState {
 
   // ── Dismissals ──
   linkApiBannerDismissed: boolean;
+  /** The Chat Settings "drag to place it" tip was dismissed on this device. */
+  chatSettingsMoveTipDismissed: boolean;
+  /** The once-only chat window introduction was dismissed across chats and devices. */
+  chatWindowIntroDismissed: boolean;
 
   // ── EchoChamber ──
   echoChamberOpen: boolean;
@@ -1032,6 +1114,7 @@ interface UIState {
   setChatBackground: (url: string | null) => void;
   setDefaultRoleplayBackground: (url: string) => void;
   setChatBackgroundBlur: (v: number) => void;
+  setConversationBackgroundImageOpacity: (v: number) => void;
   setCharacterLibrarySelectedId: (id: string | null) => void;
   setPersonaLibrarySelectedId: (id: string | null) => void;
   setCharacterLibrarySort: (sort: CharacterLibrarySort) => void;
@@ -1055,8 +1138,9 @@ interface UIState {
   setAgentPanelSort: (sort: ResourcePanelSort) => void;
   openCharacterDetail: (id: string, options?: { preserveCharacterLibrary?: boolean; initialTab?: string }) => void;
   closeCharacterDetail: () => void;
-  openLorebookDetail: (id: string, options?: { initialTab?: string }) => void;
+  openLorebookDetail: (id: string, options?: { initialTab?: string; entryId?: string }) => void;
   closeLorebookDetail: () => void;
+  setLorebookLinkClipboard: (links: NonNullable<UIState["lorebookLinkClipboard"]>) => void;
   openPresetDetail: (id: string, options?: { initialTab?: string }) => void;
   closePresetDetail: () => void;
   openConnectionDetail: (id: string) => void;
@@ -1106,6 +1190,16 @@ interface UIState {
   setLanguage: (language: AppLanguage) => void;
   setChatFontSize: (size: number) => void;
   setFontFamily: (family: string) => void;
+  setChatWidgetPreset: (preset: ChatWidgetPreset) => void;
+  setChatWidgetFont: (font: string) => void;
+  setChatWidgetShape: (shape: ChatWidgetShape) => void;
+  setChatWidgetButtonSize: (size: number | null) => void;
+  setChatWidgetBorderColor: (color: string) => void;
+  setChatWidgetBackgroundColor: (color: string) => void;
+  setChatWidgetTextColor: (color: string) => void;
+  setChatWidgetApplyFont: (enabled: boolean) => void;
+  setChatWidgetApplyShape: (enabled: boolean) => void;
+  setChatWidgetApplyColors: (enabled: boolean) => void;
   setEnableStreaming: (v: boolean) => void;
   setDebugMode: (v: boolean) => void;
   setShowPaidAgentConnectionWarning: (v: boolean) => void;
@@ -1119,6 +1213,7 @@ interface UIState {
   setGameAutoPlayDelay: (v: number) => void;
   setQueueImageGenerationRequests: (v: boolean) => void;
   setReviewImagePromptsBeforeSend: (v: boolean) => void;
+  setAutoSaveGeneratedImagesToGalleries: (v: boolean) => void;
   setImageBackgroundDimensions: (width: number, height: number) => void;
   setImageIllustrationDimensions: (width: number, height: number) => void;
   setImageGameDimensions: (width: number, height: number) => void;
@@ -1138,6 +1233,7 @@ interface UIState {
   setShowMessageNumbers: (v: boolean) => void;
   setShowCharactersInPersonaPickers: (v: boolean) => void;
   setGuideGenerations: (v: boolean) => void;
+  setKeepGuidanceAfterRegenerate: (v: boolean) => void;
   setShowQuickRepliesMenu: (v: boolean) => void;
   setShowQuickReplyPostOnly: (v: boolean) => void;
   setShowQuickReplyGuide: (v: boolean) => void;
@@ -1148,6 +1244,7 @@ interface UIState {
   setChatSettingsSectionExpanded: (id: string, open: boolean) => void;
   setConfirmBeforeDelete: (v: boolean) => void;
   setIncludeReasoningInExports: (v: boolean) => void;
+  setIncludePrivateNotesInExports: (v: boolean) => void;
   setMessagesPerPage: (n: number) => void;
   setBoldDialogue: (v: boolean) => void;
   setColorInlineNames: (v: boolean) => void;
@@ -1176,6 +1273,7 @@ interface UIState {
   setEditMessageOnDoubleClick: (v: boolean) => void;
   setSummaryPopoverSettings: (settings: Partial<SummaryPopoverSettings>) => void;
   setScenePromptPreferences: (preferences: ScenePromptPreferences) => void;
+  setSceneOriginFocus: (origin: ScenePackageOrigin | null) => void;
   setChatFontColor: (v: string) => void;
   setDefaultDialogueColor: (v: string) => void;
   setChatChromeTextColor: (v: string) => void;
@@ -1190,6 +1288,9 @@ interface UIState {
   setRoleplayNarratorAvatarCycling: (v: boolean) => void;
   setRoleplaySpriteScale: (v: number) => void;
   setRoleplayDisplayStyle: (v: "classic" | "visual-novel") => void;
+  setRoleplayChatPosition: (v: RoleplayChatPosition) => void;
+  setRoleplayVnAutoPlay: (v: boolean) => void;
+  setRoleplayVnAutoPlayDelay: (v: number) => void;
   setRoleplayVnPortraitScale: (v: number) => void;
   setRoleplayVnSpriteScale: (v: number) => void;
   setGameAvatarScale: (v: number) => void;
@@ -1240,6 +1341,8 @@ interface UIState {
   markChatHelpSeen: (mode: ChatModeShortcut) => void;
   setChatHelpButtonHidden: (v: boolean) => void;
   dismissLinkApiBanner: () => void;
+  dismissChatSettingsMoveTip: () => void;
+  dismissChatWindowIntro: () => void;
   toggleEchoChamber: () => void;
   setEchoChamberSide: (side: EchoChamberSide) => void;
   setEchoChamberSideForChat: (chatId: string, side: EchoChamberSide) => void;
@@ -1333,8 +1436,19 @@ export function pickSyncedSettings(state: UIState) {
     chatBackground: state.chatBackground,
     defaultRoleplayBackground: state.defaultRoleplayBackground,
     chatBackgroundBlur: state.chatBackgroundBlur,
+    conversationBackgroundImageOpacity: state.conversationBackgroundImageOpacity,
     language: state.language,
     fontFamily: state.fontFamily,
+    chatWidgetPreset: state.chatWidgetPreset,
+    chatWidgetFont: state.chatWidgetFont,
+    chatWidgetShape: state.chatWidgetShape,
+    chatWidgetButtonSize: state.chatWidgetButtonSize,
+    chatWidgetBorderColor: state.chatWidgetBorderColor,
+    chatWidgetBackgroundColor: state.chatWidgetBackgroundColor,
+    chatWidgetTextColor: state.chatWidgetTextColor,
+    chatWidgetApplyFont: state.chatWidgetApplyFont,
+    chatWidgetApplyShape: state.chatWidgetApplyShape,
+    chatWidgetApplyColors: state.chatWidgetApplyColors,
     enableStreaming: state.enableStreaming,
     streamingSpeed: state.streamingSpeed,
     showPaidAgentConnectionWarning: state.showPaidAgentConnectionWarning,
@@ -1347,6 +1461,7 @@ export function pickSyncedSettings(state: UIState) {
     gameAutoPlayDelay: state.gameAutoPlayDelay,
     queueImageGenerationRequests: state.queueImageGenerationRequests,
     reviewImagePromptsBeforeSend: state.reviewImagePromptsBeforeSend,
+    autoSaveGeneratedImagesToGalleries: state.autoSaveGeneratedImagesToGalleries,
     imageBackgroundWidth: state.imageBackgroundWidth,
     imageBackgroundHeight: state.imageBackgroundHeight,
     imageIllustrationWidth: state.imageIllustrationWidth,
@@ -1372,6 +1487,7 @@ export function pickSyncedSettings(state: UIState) {
     showMessageNumbers: state.showMessageNumbers,
     showCharactersInPersonaPickers: state.showCharactersInPersonaPickers,
     guideGenerations: state.guideGenerations,
+    keepGuidanceAfterRegenerate: state.keepGuidanceAfterRegenerate,
     showQuickRepliesMenu: state.showQuickRepliesMenu,
     showQuickReplyPostOnly: state.showQuickReplyPostOnly,
     showQuickReplyGuide: state.showQuickReplyGuide,
@@ -1380,6 +1496,7 @@ export function pickSyncedSettings(state: UIState) {
     chatSettingsExpandedSections: state.chatSettingsExpandedSections,
     confirmBeforeDelete: state.confirmBeforeDelete,
     includeReasoningInExports: state.includeReasoningInExports,
+    includePrivateNotesInExports: state.includePrivateNotesInExports,
     messagesPerPage: state.messagesPerPage,
     boldDialogue: state.boldDialogue,
     colorInlineNames: state.colorInlineNames,
@@ -1421,6 +1538,9 @@ export function pickSyncedSettings(state: UIState) {
     roleplayNarratorAvatarCycling: state.roleplayNarratorAvatarCycling,
     roleplaySpriteScale: state.roleplaySpriteScale,
     roleplayDisplayStyle: state.roleplayDisplayStyle,
+    roleplayChatPosition: state.roleplayChatPosition,
+    roleplayVnAutoPlay: state.roleplayVnAutoPlay,
+    roleplayVnAutoPlayDelay: state.roleplayVnAutoPlayDelay,
     roleplayVnPortraitScale: state.roleplayVnPortraitScale,
     roleplayVnSpriteScale: state.roleplayVnSpriteScale,
     gameAvatarScale: state.gameAvatarScale,
@@ -1438,6 +1558,8 @@ export function pickSyncedSettings(state: UIState) {
     chatHelpSeenModes: state.chatHelpSeenModes,
     chatHelpButtonHidden: state.chatHelpButtonHidden,
     linkApiBannerDismissed: state.linkApiBannerDismissed,
+    chatSettingsMoveTipDismissed: state.chatSettingsMoveTipDismissed,
+    chatWindowIntroDismissed: state.chatWindowIntroDismissed,
     echoChamberOpen: state.echoChamberOpen,
     echoChamberSide: state.echoChamberSide,
     userStatusManual: state.userStatusManual,
@@ -1534,10 +1656,21 @@ export function pickPersistedUIState(state: UIState) {
     chatBackground: state.chatBackground,
     defaultRoleplayBackground: state.defaultRoleplayBackground,
     chatBackgroundBlur: state.chatBackgroundBlur,
+    conversationBackgroundImageOpacity: state.conversationBackgroundImageOpacity,
     fontSize: state.fontSize,
     language: state.language,
     chatFontSize: state.chatFontSize,
     fontFamily: state.fontFamily,
+    chatWidgetPreset: state.chatWidgetPreset,
+    chatWidgetFont: state.chatWidgetFont,
+    chatWidgetShape: state.chatWidgetShape,
+    chatWidgetButtonSize: state.chatWidgetButtonSize,
+    chatWidgetBorderColor: state.chatWidgetBorderColor,
+    chatWidgetBackgroundColor: state.chatWidgetBackgroundColor,
+    chatWidgetTextColor: state.chatWidgetTextColor,
+    chatWidgetApplyFont: state.chatWidgetApplyFont,
+    chatWidgetApplyShape: state.chatWidgetApplyShape,
+    chatWidgetApplyColors: state.chatWidgetApplyColors,
     enableStreaming: state.enableStreaming,
     debugMode: state.debugMode,
     showPaidAgentConnectionWarning: state.showPaidAgentConnectionWarning,
@@ -1551,6 +1684,7 @@ export function pickPersistedUIState(state: UIState) {
     gameAutoPlayDelay: state.gameAutoPlayDelay,
     queueImageGenerationRequests: state.queueImageGenerationRequests,
     reviewImagePromptsBeforeSend: state.reviewImagePromptsBeforeSend,
+    autoSaveGeneratedImagesToGalleries: state.autoSaveGeneratedImagesToGalleries,
     imageBackgroundWidth: state.imageBackgroundWidth,
     imageBackgroundHeight: state.imageBackgroundHeight,
     imageIllustrationWidth: state.imageIllustrationWidth,
@@ -1576,6 +1710,7 @@ export function pickPersistedUIState(state: UIState) {
     showMessageNumbers: state.showMessageNumbers,
     showCharactersInPersonaPickers: state.showCharactersInPersonaPickers,
     guideGenerations: state.guideGenerations,
+    keepGuidanceAfterRegenerate: state.keepGuidanceAfterRegenerate,
     showQuickRepliesMenu: state.showQuickRepliesMenu,
     showQuickReplyPostOnly: state.showQuickReplyPostOnly,
     showQuickReplyGuide: state.showQuickReplyGuide,
@@ -1584,6 +1719,7 @@ export function pickPersistedUIState(state: UIState) {
     chatSettingsExpandedSections: state.chatSettingsExpandedSections,
     confirmBeforeDelete: state.confirmBeforeDelete,
     includeReasoningInExports: state.includeReasoningInExports,
+    includePrivateNotesInExports: state.includePrivateNotesInExports,
     messagesPerPage: state.messagesPerPage,
     boldDialogue: state.boldDialogue,
     colorInlineNames: state.colorInlineNames,
@@ -1626,6 +1762,9 @@ export function pickPersistedUIState(state: UIState) {
     roleplayNarratorAvatarCycling: state.roleplayNarratorAvatarCycling,
     roleplaySpriteScale: state.roleplaySpriteScale,
     roleplayDisplayStyle: state.roleplayDisplayStyle,
+    roleplayChatPosition: state.roleplayChatPosition,
+    roleplayVnAutoPlay: state.roleplayVnAutoPlay,
+    roleplayVnAutoPlayDelay: state.roleplayVnAutoPlayDelay,
     roleplayVnPortraitScale: state.roleplayVnPortraitScale,
     roleplayVnSpriteScale: state.roleplayVnSpriteScale,
     gameAvatarScale: state.gameAvatarScale,
@@ -1646,6 +1785,8 @@ export function pickPersistedUIState(state: UIState) {
     chatHelpSeenModes: state.chatHelpSeenModes,
     chatHelpButtonHidden: state.chatHelpButtonHidden,
     linkApiBannerDismissed: state.linkApiBannerDismissed,
+    chatSettingsMoveTipDismissed: state.chatSettingsMoveTipDismissed,
+    chatWindowIntroDismissed: state.chatWindowIntroDismissed,
     echoChamberOpen: state.echoChamberOpen,
     echoChamberSide: state.echoChamberSide,
     echoChamberSideByChatId: state.echoChamberSideByChatId,
@@ -1726,8 +1867,10 @@ export const useUIStore = create<UIState>()(
         chatBackground: null,
         defaultRoleplayBackground: DEFAULT_ROLEPLAY_BACKGROUND_URL,
         chatBackgroundBlur: 0,
+        conversationBackgroundImageOpacity: DEFAULT_CONVERSATION_BACKGROUND_IMAGE_OPACITY,
         characterDetailId: null,
         lorebookDetailId: null,
+        lorebookLinkClipboard: null,
         presetDetailId: null,
         presetDetailInitialTab: null,
         connectionDetailId: null,
@@ -1742,6 +1885,7 @@ export const useUIStore = create<UIState>()(
         regexDetailReturn: null,
         characterDetailInitialTab: null,
         lorebookDetailInitialTab: null,
+        lorebookDetailInitialEntryId: null,
         personaDetailInitialTab: null,
         botBrowserOpen: false,
         gameAssetsBrowserOpen: false,
@@ -1782,6 +1926,16 @@ export const useUIStore = create<UIState>()(
         language: DEFAULT_APP_LANGUAGE as AppLanguage,
         chatFontSize: 16,
         fontFamily: "",
+        chatWidgetPreset: "default" as ChatWidgetPreset,
+        chatWidgetFont: "",
+        chatWidgetShape: "preset" as ChatWidgetShape,
+        chatWidgetButtonSize: null,
+        chatWidgetBorderColor: "",
+        chatWidgetBackgroundColor: "",
+        chatWidgetTextColor: "",
+        chatWidgetApplyFont: false,
+        chatWidgetApplyShape: false,
+        chatWidgetApplyColors: false,
         enableStreaming: true,
         debugMode: false,
         showPaidAgentConnectionWarning: true,
@@ -1795,6 +1949,7 @@ export const useUIStore = create<UIState>()(
         gameAutoPlayDelay: 3000,
         queueImageGenerationRequests: true,
         reviewImagePromptsBeforeSend: false,
+        autoSaveGeneratedImagesToGalleries: true,
         imageBackgroundWidth: 1280,
         imageBackgroundHeight: 720,
         imageIllustrationWidth: 896,
@@ -1820,6 +1975,7 @@ export const useUIStore = create<UIState>()(
         showMessageNumbers: false,
         showCharactersInPersonaPickers: false,
         guideGenerations: false,
+        keepGuidanceAfterRegenerate: true,
         showQuickRepliesMenu: false,
         showQuickReplyPostOnly: true,
         showQuickReplyGuide: true,
@@ -1828,6 +1984,7 @@ export const useUIStore = create<UIState>()(
         chatSettingsExpandedSections: {},
         confirmBeforeDelete: true,
         includeReasoningInExports: false,
+        includePrivateNotesInExports: false,
         messagesPerPage: 20,
         boldDialogue: true,
         colorInlineNames: false,
@@ -1856,6 +2013,7 @@ export const useUIStore = create<UIState>()(
         editMessageOnDoubleClick: true,
         summaryPopoverSettings: DEFAULT_SUMMARY_POPOVER_SETTINGS,
         scenePromptPreferences: DEFAULT_SCENE_PROMPT_PREFERENCES,
+        sceneOriginFocus: null,
         chatFontColor: "",
         defaultDialogueColor: "",
         chatChromeTextColor: "",
@@ -1870,6 +2028,9 @@ export const useUIStore = create<UIState>()(
         roleplayNarratorAvatarCycling: true,
         roleplaySpriteScale: 1,
         roleplayDisplayStyle: "classic",
+        roleplayChatPosition: "center",
+        roleplayVnAutoPlay: false,
+        roleplayVnAutoPlayDelay: 3000,
         roleplayVnPortraitScale: 1,
         roleplayVnSpriteScale: 1.35,
         gameAvatarScale: 1,
@@ -1908,6 +2069,8 @@ export const useUIStore = create<UIState>()(
         chatHelpSeenModes: [],
         chatHelpButtonHidden: false,
         linkApiBannerDismissed: false,
+        chatSettingsMoveTipDismissed: false,
+        chatWindowIntroDismissed: false,
         echoChamberOpen: true,
         echoChamberSide: "bottom-right" as EchoChamberSide,
         echoChamberSideByChatId: {},
@@ -2051,6 +2214,8 @@ export const useUIStore = create<UIState>()(
         setDefaultRoleplayBackground: (url) =>
           set({ defaultRoleplayBackground: normalizeDefaultRoleplayBackground(url) }),
         setChatBackgroundBlur: (v) => set({ chatBackgroundBlur: Math.max(0, Math.min(24, Math.round(v))) }),
+        setConversationBackgroundImageOpacity: (v) =>
+          set({ conversationBackgroundImageOpacity: normalizeConversationBackgroundImageOpacity(v) }),
         setCharacterLibrarySelectedId: (id) => set({ characterLibrarySelectedId: id }),
         setPersonaLibrarySelectedId: (id) => set({ personaLibrarySelectedId: id }),
         setCharacterLibrarySort: (sort) => set({ characterLibrarySort: normalizeCharacterLibrarySort(sort) }),
@@ -2104,10 +2269,12 @@ export const useUIStore = create<UIState>()(
             editorDirty: false,
             ...restoreMobileDetailReturnPanel(s.detailReturnRightPanel),
           })),
+        setLorebookLinkClipboard: (links) => set({ lorebookLinkClipboard: links }),
         openLorebookDetail: (id, options) =>
           set((s) => ({
             lorebookDetailId: id,
             lorebookDetailInitialTab: options?.initialTab ?? null,
+            lorebookDetailInitialEntryId: options?.entryId ?? null,
             characterLibraryOpen: false,
             agentCatalogOpen: false,
             botBrowserOpen: false,
@@ -2435,7 +2602,7 @@ export const useUIStore = create<UIState>()(
             connectionDetailId: null,
             agentDetailId: null,
             toolDetailId: null,
-            ...(window.innerWidth < 768 && { rightPanelOpen: false }),
+            ...(isMobileShellViewport() && { rightPanelOpen: false }),
           }),
         closeBotBrowser: () => set({ botBrowserOpen: false }),
         openGameAssetsBrowser: () =>
@@ -2455,7 +2622,7 @@ export const useUIStore = create<UIState>()(
             connectionDetailId: null,
             agentDetailId: null,
             toolDetailId: null,
-            ...(window.innerWidth < 768 && { rightPanelOpen: false }),
+            ...(isMobileShellViewport() && { rightPanelOpen: false }),
           }),
         closeGameAssetsBrowser: () => set({ gameAssetsBrowserOpen: false }),
         openNoodle: () =>
@@ -2476,7 +2643,7 @@ export const useUIStore = create<UIState>()(
             agentDetailId: null,
             toolDetailId: null,
             editorDirty: false,
-            ...(window.innerWidth < 768 && { rightPanelOpen: false }),
+            ...(isMobileShellViewport() && { rightPanelOpen: false }),
           }),
         closeNoodle: () => set({ noodleOpen: false }),
         setNoodleSelectedPersonaId: (id) => set({ noodleSelectedPersonaId: id }),
@@ -2524,7 +2691,7 @@ export const useUIStore = create<UIState>()(
         requestChatModeShortcut: (mode) =>
           set((state) => ({
             sidebarOpen: true,
-            rightPanelOpen: window.innerWidth < 768 ? false : state.rightPanelOpen,
+            rightPanelOpen: isMobileShellViewport() ? false : state.rightPanelOpen,
             characterDetailId: null,
             lorebookDetailId: null,
             presetDetailId: null,
@@ -2552,6 +2719,24 @@ export const useUIStore = create<UIState>()(
         setLanguage: (language) => set({ language }),
         setChatFontSize: (size) => set({ chatFontSize: size }),
         setFontFamily: (family) => set({ fontFamily: family }),
+        setChatWidgetPreset: (preset) =>
+          set({
+            chatWidgetPreset: normalizeChatWidgetPreset(preset),
+            chatWidgetFont: "",
+            chatWidgetShape: "preset",
+            chatWidgetBorderColor: "",
+            chatWidgetBackgroundColor: "",
+            chatWidgetTextColor: "",
+          }),
+        setChatWidgetFont: (font) => set({ chatWidgetFont: normalizeChatWidgetFont(font) }),
+        setChatWidgetShape: (shape) => set({ chatWidgetShape: normalizeChatWidgetShape(shape) }),
+        setChatWidgetButtonSize: (size) => set({ chatWidgetButtonSize: normalizeChatWidgetButtonSize(size) }),
+        setChatWidgetBorderColor: (color) => set({ chatWidgetBorderColor: normalizeChatWidgetColor(color) }),
+        setChatWidgetBackgroundColor: (color) => set({ chatWidgetBackgroundColor: normalizeChatWidgetColor(color) }),
+        setChatWidgetTextColor: (color) => set({ chatWidgetTextColor: normalizeChatWidgetColor(color) }),
+        setChatWidgetApplyFont: (enabled) => set({ chatWidgetApplyFont: enabled }),
+        setChatWidgetApplyShape: (enabled) => set({ chatWidgetApplyShape: enabled }),
+        setChatWidgetApplyColors: (enabled) => set({ chatWidgetApplyColors: enabled }),
         setEnableStreaming: (v) => set({ enableStreaming: v }),
         setDebugMode: (v) => set({ debugMode: v }),
         setShowPaidAgentConnectionWarning: (v) => set({ showPaidAgentConnectionWarning: v }),
@@ -2565,6 +2750,7 @@ export const useUIStore = create<UIState>()(
         setGameAutoPlayDelay: (v) => set({ gameAutoPlayDelay: Math.max(200, Math.min(10000, Math.round(v))) }),
         setQueueImageGenerationRequests: (v) => set({ queueImageGenerationRequests: v }),
         setReviewImagePromptsBeforeSend: (v) => set({ reviewImagePromptsBeforeSend: v }),
+        setAutoSaveGeneratedImagesToGalleries: (v) => set({ autoSaveGeneratedImagesToGalleries: v }),
         setImageBackgroundDimensions: (width, height) =>
           set({
             imageBackgroundWidth: clampImageDimension(width),
@@ -2608,6 +2794,7 @@ export const useUIStore = create<UIState>()(
         setShowMessageNumbers: (v) => set({ showMessageNumbers: v }),
         setShowCharactersInPersonaPickers: (v) => set({ showCharactersInPersonaPickers: v }),
         setGuideGenerations: (v) => set({ guideGenerations: v }),
+        setKeepGuidanceAfterRegenerate: (v) => set({ keepGuidanceAfterRegenerate: v }),
         setShowQuickRepliesMenu: (v) => set({ showQuickRepliesMenu: v }),
         setShowQuickReplyPostOnly: (v) => set({ showQuickReplyPostOnly: v }),
         setShowQuickReplyGuide: (v) => set({ showQuickReplyGuide: v }),
@@ -2640,6 +2827,7 @@ export const useUIStore = create<UIState>()(
           })),
         setConfirmBeforeDelete: (v) => set({ confirmBeforeDelete: v }),
         setIncludeReasoningInExports: (v) => set({ includeReasoningInExports: v }),
+        setIncludePrivateNotesInExports: (v) => set({ includePrivateNotesInExports: v }),
         setMessagesPerPage: (n) => set({ messagesPerPage: n }),
         setBoldDialogue: (v) => set({ boldDialogue: v }),
         setColorInlineNames: (v) => set({ colorInlineNames: v }),
@@ -2699,6 +2887,7 @@ export const useUIStore = create<UIState>()(
           })),
         setScenePromptPreferences: (preferences) =>
           set({ scenePromptPreferences: normalizeScenePromptPreferences(preferences) }),
+        setSceneOriginFocus: (origin) => set({ sceneOriginFocus: origin }),
         setChatFontColor: (v) => set({ chatFontColor: v }),
         setDefaultDialogueColor: (v) => set({ defaultDialogueColor: v }),
         setChatChromeTextColor: (v) => set({ chatChromeTextColor: normalizeChatChromeTextColor(v) }),
@@ -2721,6 +2910,10 @@ export const useUIStore = create<UIState>()(
           set({ roleplaySpriteScale: Math.max(ROLEPLAY_SPRITE_SCALE_MIN, Math.min(ROLEPLAY_SPRITE_SCALE_MAX, v)) }),
         setGameAvatarScale: (v) => set({ gameAvatarScale: Math.max(0.75, Math.min(1.75, v)) }),
         setRoleplayDisplayStyle: (v) => set({ roleplayDisplayStyle: v }),
+        setRoleplayChatPosition: (v) => set({ roleplayChatPosition: normalizeRoleplayChatPosition(v) }),
+        setRoleplayVnAutoPlay: (v) => set({ roleplayVnAutoPlay: v }),
+        setRoleplayVnAutoPlayDelay: (v) =>
+          set({ roleplayVnAutoPlayDelay: Math.max(200, Math.min(10000, Math.round(v))) }),
         setRoleplayVnPortraitScale: (v) =>
           set({ roleplayVnPortraitScale: Number.isFinite(v) ? Math.max(0.75, Math.min(1.75, v)) : 1 }),
         setRoleplayVnSpriteScale: (v) =>
@@ -2766,9 +2959,20 @@ export const useUIStore = create<UIState>()(
             chatBackground: null,
             defaultRoleplayBackground: DEFAULT_ROLEPLAY_BACKGROUND_URL,
             chatBackgroundBlur: 0,
+            conversationBackgroundImageOpacity: DEFAULT_CONVERSATION_BACKGROUND_IMAGE_OPACITY,
             fontSize: 17 as FontSize,
             chatFontSize: 16,
             fontFamily: "",
+            chatWidgetPreset: "default" as ChatWidgetPreset,
+            chatWidgetFont: "",
+            chatWidgetShape: "preset" as ChatWidgetShape,
+            chatWidgetButtonSize: null,
+            chatWidgetBorderColor: "",
+            chatWidgetBackgroundColor: "",
+            chatWidgetTextColor: "",
+            chatWidgetApplyFont: false,
+            chatWidgetApplyShape: false,
+            chatWidgetApplyColors: false,
             conversationMessageStyle: "classic" as ConversationMessageStyle,
             conversationAvatarShape: "circle" as ConversationAvatarShape,
             chatFontColor: "",
@@ -2785,6 +2989,9 @@ export const useUIStore = create<UIState>()(
             roleplayNarratorAvatarCycling: true,
             roleplaySpriteScale: 1,
             roleplayDisplayStyle: "classic",
+            roleplayChatPosition: "center",
+            roleplayVnAutoPlay: false,
+            roleplayVnAutoPlayDelay: 3000,
             roleplayVnPortraitScale: 1,
             roleplayVnSpriteScale: 1.35,
             gameDialogueDisplayMode: "classic" as GameDialogueDisplayMode,
@@ -2887,6 +3094,8 @@ export const useUIStore = create<UIState>()(
             chatHelpSeenModes: v ? ["conversation", "roleplay", "game"] : state.chatHelpSeenModes,
           })),
         dismissLinkApiBanner: () => set({ linkApiBannerDismissed: true }),
+        dismissChatSettingsMoveTip: () => set({ chatSettingsMoveTipDismissed: true }),
+        dismissChatWindowIntro: () => set({ chatWindowIntroDismissed: true }),
         toggleEchoChamber: () => set((s) => ({ echoChamberOpen: !s.echoChamberOpen })),
         setEchoChamberSide: (side) => set({ echoChamberSide: side }),
         setEchoChamberSideForChat: (chatId, side) => {
@@ -3232,6 +3441,12 @@ export const useUIStore = create<UIState>()(
         if (version <= 31 && persisted.chatBackgroundBlur === undefined) {
           persisted.chatBackgroundBlur = 0;
         }
+        if (persisted.conversationBackgroundImageOpacity === undefined) {
+          persisted.conversationBackgroundImageOpacity = DEFAULT_CONVERSATION_BACKGROUND_IMAGE_OPACITY;
+        }
+        persisted.conversationBackgroundImageOpacity = normalizeConversationBackgroundImageOpacity(
+          persisted.conversationBackgroundImageOpacity,
+        );
         persisted.trackerPanelThoughtBubbleDisplay = normalizeTrackerThoughtBubbleDisplay(
           persisted.trackerPanelThoughtBubbleDisplay,
         );
@@ -3544,6 +3759,7 @@ export const useUIStore = create<UIState>()(
         persisted.professorMariSuggestionsEnabled = persisted.professorMariSuggestionsEnabled !== false;
         persisted.professorMariNavigationEnabled = persisted.professorMariNavigationEnabled !== false;
         persisted.includeReasoningInExports = persisted.includeReasoningInExports === true;
+        persisted.includePrivateNotesInExports = persisted.includePrivateNotesInExports === true;
         persisted.roleplayReducedPaintEffects = persisted.roleplayReducedPaintEffects === true;
         persisted.showRoleplayThinkingInMessages = persisted.showRoleplayThinkingInMessages === true;
         persisted.keepRoleplayThinkingExpanded =
@@ -3556,6 +3772,28 @@ export const useUIStore = create<UIState>()(
         persisted.defaultRoleplayBackground = normalizeDefaultRoleplayBackground(persisted.defaultRoleplayBackground);
         delete persisted.trackerPanelWidth;
         return persisted;
+      },
+      merge: (persistedState: unknown, currentState) => {
+        const persisted =
+          persistedState && typeof persistedState === "object" ? (persistedState as Record<string, unknown>) : {};
+        return {
+          ...currentState,
+          ...persisted,
+          conversationBackgroundImageOpacity: normalizeConversationBackgroundImageOpacity(
+            persisted.conversationBackgroundImageOpacity,
+          ),
+          chatWidgetPreset: normalizeChatWidgetPreset(persisted.chatWidgetPreset),
+          roleplayChatPosition: normalizeRoleplayChatPosition(persisted.roleplayChatPosition),
+          chatWidgetFont: normalizeChatWidgetFont(persisted.chatWidgetFont),
+          chatWidgetShape: normalizeChatWidgetShape(persisted.chatWidgetShape),
+          chatWidgetButtonSize: normalizeChatWidgetButtonSize(persisted.chatWidgetButtonSize),
+          chatWidgetBorderColor: normalizeChatWidgetColor(persisted.chatWidgetBorderColor),
+          chatWidgetBackgroundColor: normalizeChatWidgetColor(persisted.chatWidgetBackgroundColor),
+          chatWidgetTextColor: normalizeChatWidgetColor(persisted.chatWidgetTextColor),
+          chatWidgetApplyFont: persisted.chatWidgetApplyFont === true,
+          chatWidgetApplyShape: persisted.chatWidgetApplyShape === true,
+          chatWidgetApplyColors: persisted.chatWidgetApplyColors === true,
+        };
       },
       partialize: pickPersistedUIState,
     },

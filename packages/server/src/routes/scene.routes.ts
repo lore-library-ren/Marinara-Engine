@@ -29,16 +29,27 @@ import type {
   SceneCreateResponse,
   SceneConcludeRequest,
   SceneConcludeResponse,
+  SceneAbandonResponse,
   SceneForkRequest,
   SceneForkResponse,
   ScenePlanRequest,
   ScenePlanResponse,
   ScenePromptPreferences,
   SceneFullPlan,
+  ScenePackageOrigin,
 } from "@marinara-engine/shared";
 import { resolveBaseUrl as resolveSceneConnectionBaseUrl } from "./generate/generate-route-utils.js";
 import { assemblePrompt } from "../services/prompt/assembler.js";
 import { parsePromptPresetChoices } from "../services/generation/conversation-context-utils.js";
+import { withDeadline } from "../services/capability-packages/capability-prompt-context.service.js";
+import {
+  SCENE_ORIGIN_TIMEOUT_MS,
+  getCapabilitySceneOrigin,
+  parseScenePackageData,
+  parseStoredScenePackageData,
+  parseScenePackageOrigin,
+  releaseScenePackageOrigin,
+} from "../services/capability-packages/capability-scene-origin.service.js";
 
 const BG_DIR = join(DATA_DIR, "backgrounds");
 const ALLOWED_BG_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"]);
@@ -194,7 +205,7 @@ async function getRecentMessages(
   chats: ReturnType<typeof createChatsStorage>,
   chatId: string,
   limit: number = 30,
-): Promise<ChatMessage[]> {
+): Promise<Array<ChatMessage & { characterId: string | null }>> {
   const allMsgs = await chats.listMessages(chatId);
   return allMsgs
     .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
@@ -202,6 +213,7 @@ async function getRecentMessages(
     .map((m: any) => ({
       role: m.role === "user" ? ("user" as const) : ("assistant" as const),
       content: m.content,
+      characterId: m.characterId ?? null,
     }));
 }
 
@@ -253,6 +265,7 @@ function parseCharacterIds(characterIds: unknown): string[] {
 /** Scene lifecycle keys that must not be copied into standalone roleplay metadata. */
 const SCENE_FORK_METADATA_EXCLUDE = new Set([
   "sceneOriginChatId",
+  "scenePackageOrigin",
   "sceneInitiatorCharId",
   "sceneDescription",
   "sceneScenario",
@@ -307,6 +320,130 @@ export async function sceneRoutes(app: FastifyInstance) {
   const connections = createConnectionsStorage(app.db);
   const chars = createCharactersStorage(app.db);
 
+  const releaseSceneParticipants = (originChatId: string, sceneChatId: string) =>
+    chats.patchMetadata(originChatId, (current) =>
+      current.activeSceneChatId === sceneChatId ? { activeSceneChatId: undefined, sceneBusyCharIds: undefined } : {},
+    );
+
+  /** Where a scene branches from: a Conversation, or a package thread through its scene-origin provider. */
+  type SceneOrigin = {
+    chat: NonNullable<Awaited<ReturnType<typeof chats.getById>>> | null;
+    packageOrigin: ScenePackageOrigin | null;
+    characterIds: string[];
+    personaId: string | null;
+    personaCharacterId: string | null;
+    mode: string | null;
+    connectionId: string | null;
+    lorebookIds: string[];
+    /** Context the package origin owns, given to the planner and the scene writer. */
+    notes: string | null;
+    /** Recent exchanges as "Speaker: text" lines, oldest first. */
+    history(limit: number, speakers: { persona: string; character: string }): Promise<string[]>;
+  };
+
+  async function resolveSceneOrigin(
+    chatId: unknown,
+    packageOriginValue: unknown,
+    notFound: string,
+  ): Promise<SceneOrigin | { status: 400 | 404 | 503; error: string }> {
+    if (packageOriginValue !== undefined && packageOriginValue !== null) {
+      if (chatId) return { status: 400, error: "Choose a Conversation or a package origin, not both" };
+      const packageOrigin = parseScenePackageOrigin(packageOriginValue);
+      if (!packageOrigin) return { status: 400, error: "Invalid package origin" };
+      const provider = getCapabilitySceneOrigin(packageOrigin.packageId);
+      if (!provider) return { status: 404, error: "This package cannot start scenes right now" };
+      let context: Awaited<ReturnType<typeof provider.getContext>>;
+      try {
+        context = await withDeadline(
+          provider.getContext(packageOrigin.originId),
+          "Scene origin context",
+          SCENE_ORIGIN_TIMEOUT_MS,
+        );
+      } catch (error) {
+        logger.warn({ err: error, ...packageOrigin }, "[scene] Package origin context failed");
+        return { status: 503, error: "This package cannot start scenes right now" };
+      }
+      if (!context) return { status: 404, error: notFound };
+      const characterIds: string[] = [];
+      for (const id of new Set(Array.isArray(context.characterIds) ? context.characterIds : [])) {
+        if (typeof id === "string" && (await chars.getById(id))) characterIds.push(id);
+      }
+      if (!characterIds.length) return { status: 400, error: "The scene origin has no characters to cast" };
+      const personaId =
+        typeof context.personaId === "string" && (await chars.getPersona(context.personaId)) ? context.personaId : null;
+      const transcript = (Array.isArray(context.transcript) ? context.transcript : [])
+        .filter((line) => typeof line?.speaker === "string" && typeof line.content === "string" && line.content.trim())
+        .map((line) => `${line.speaker.trim() || "Character"}: ${line.content.trim()}`);
+      return {
+        chat: null,
+        packageOrigin,
+        characterIds,
+        personaId,
+        personaCharacterId: null,
+        mode: "conversation",
+        // An unknown connection is treated as none, like an unknown persona.
+        connectionId:
+          typeof context.connectionId === "string" && (await connections.getById(context.connectionId))
+            ? context.connectionId
+            : ((await connections.getDefault())?.id ?? null),
+        lorebookIds: Array.isArray(context.lorebookIds)
+          ? context.lorebookIds.filter((id): id is string => typeof id === "string")
+          : [],
+        notes: typeof context.notes === "string" && context.notes.trim() ? context.notes.trim().slice(0, 8000) : null,
+        history: async (limit) => transcript.slice(-limit),
+      };
+    }
+    if (typeof chatId !== "string" || !chatId) return { status: 400, error: "A scene needs an origin" };
+    const chat = await chats.getById(chatId);
+    if (!chat) return { status: 404, error: notFound };
+    const meta = parseMetadata(chat);
+    return {
+      chat,
+      packageOrigin: null,
+      characterIds: parseCharacterIds(chat.characterIds),
+      personaId: chat.personaId ?? null,
+      personaCharacterId: chat.personaCharacterId ?? null,
+      mode: chat.mode,
+      connectionId: chat.connectionId ?? null,
+      lorebookIds: Array.isArray(meta.activeLorebookIds) ? meta.activeLorebookIds : [],
+      notes: null,
+      history: async (limit, speakers) =>
+        (await getRecentMessages(chats, chat.id, limit)).map(
+          (m) =>
+            `${m.role === "user" ? speakers.persona : speakers.character}: ${stripConversationPromptTimestamps(m.content)}`,
+        ),
+    };
+  }
+
+  async function resolveSceneParticipants(
+    origin: SceneOrigin,
+    selection: { participantCharacterIds?: unknown; personaId?: unknown },
+  ) {
+    const originIds = origin.characterIds;
+    const selectedIds = selection.participantCharacterIds;
+    if (
+      selectedIds !== undefined &&
+      (!Array.isArray(selectedIds) ||
+        selectedIds.length === 0 ||
+        selectedIds.some((id) => typeof id !== "string" || !originIds.includes(id)))
+    ) {
+      return { error: "Choose at least one character from the source Conversation" } as const;
+    }
+    const personaId = selection.personaId;
+    if (
+      personaId !== undefined &&
+      personaId !== null &&
+      (typeof personaId !== "string" || !(await chars.getPersona(personaId)))
+    ) {
+      return { error: "The selected scene persona no longer exists" } as const;
+    }
+    return {
+      characterIds: selectedIds === undefined ? originIds : [...new Set(selectedIds as string[])],
+      personaId: personaId === undefined ? origin.personaId : (personaId as string | null),
+      personaCharacterId: personaId === undefined ? (origin.personaCharacterId ?? null) : null,
+    };
+  }
+
   async function createSceneProvider(
     conn: NonNullable<Awaited<ReturnType<typeof connections.getWithKey>>>,
     baseUrl: string,
@@ -339,10 +476,22 @@ export async function sceneRoutes(app: FastifyInstance) {
   // stores conversation history as hidden context in metadata.
   app.post<{ Body: SceneCreateRequest }>("/create", async (req, reply) => {
     const { originChatId, initiatorCharId, plan, connectionId, promptPresetId } = req.body;
+    const packageData = parseScenePackageData(req.body.packageData);
+    if (packageData === "invalid" || (packageData && !req.body.packageOrigin))
+      return reply.status(400).send({ error: "Package data must be a small JSON object for a package origin" });
+    // A package may hand over a plan it wrote itself, so the fields the chat is built from are checked.
+    if (
+      !plan ||
+      typeof plan !== "object" ||
+      (["name", "description", "firstMessage", "systemPrompt"] as const).some(
+        (field) => typeof plan[field] !== "string",
+      ) ||
+      !plan.name.trim()
+    )
+      return reply.status(400).send({ error: "Invalid scene plan" });
 
-    // Validate origin chat
-    const originChat = await chats.getById(originChatId);
-    if (!originChat) return reply.status(404).send({ error: "Origin chat not found" });
+    const origin = await resolveSceneOrigin(originChatId, req.body.packageOrigin, "Origin chat not found");
+    if ("error" in origin) return reply.status(origin.status).send({ error: origin.error });
     if (promptPresetId !== undefined && promptPresetId !== null && typeof promptPresetId !== "string")
       return reply.status(400).send({ error: "Prompt preset must be an ID or null" });
     const selectedPresetId = promptPresetId?.trim() || null;
@@ -357,10 +506,13 @@ export async function sceneRoutes(app: FastifyInstance) {
     )
       return reply.status(400).send({ error: "Invalid scene preset choices" });
 
-    // Resolve participants — use plan's characterIds if present, else all origin chars
-    const originCharIds = parseCharacterIds(originChat.characterIds);
-    const plannedCharIds = parseCharacterIds(plan.characterIds);
-    const finalParticipantIds = plannedCharIds.length ? plannedCharIds : originCharIds;
+    const participants = await resolveSceneParticipants(origin, req.body);
+    if ("error" in participants) return reply.status(400).send({ error: participants.error });
+    const plannedCharIds = parseCharacterIds(plan.characterIds).filter((id) => participants.characterIds.includes(id));
+    const finalParticipantIds =
+      req.body.participantCharacterIds !== undefined || !plannedCharIds.length
+        ? participants.characterIds
+        : [...new Set(plannedCharIds)];
 
     const finalSystemPrompt = plan.systemPrompt + "\n" + SCENE_GUIDELINES;
 
@@ -372,37 +524,31 @@ export async function sceneRoutes(app: FastifyInstance) {
       // Scene linkage is represented by connectedChatId. Reusing the origin's
       // branch group crosses chat modes and can hide Conversation rows.
       groupId: null,
-      personaId: originChat.personaId,
-      personaCharacterId: originChat.personaCharacterId ?? null,
+      personaId: participants.personaId,
+      personaCharacterId: participants.personaCharacterId,
       promptPresetId: selectedPresetId,
-      connectionId: connectionId ?? originChat.connectionId,
+      connectionId: connectionId ?? origin.connectionId,
     });
 
     if (!sceneChat) return reply.status(500).send({ error: "Failed to create scene chat" });
 
     // Build conversation transcript as hidden context (NOT displayed)
-    const { personaName } = await buildPersonaContext(
-      chars,
-      originChat.personaId,
-      originChat.mode,
-      originChat.personaCharacterId,
-    );
+    const { personaName } = await buildPersonaContext(chars, origin.personaId, origin.mode, origin.personaCharacterId);
     const initiatorName = initiatorCharId ? await getCharacterName(chars, initiatorCharId) : "User";
-    const recentMsgs = await getRecentMessages(chats, originChatId, 30);
-    const historyText = recentMsgs
-      .map((m) => `${m.role === "user" ? personaName : initiatorName}: ${stripConversationPromptTimestamps(m.content)}`)
+    const historyText = (await origin.history(30, { persona: personaName, character: initiatorName }))
       .join("\n\n")
       .slice(-3000);
 
     // Store scene metadata on the new chat (single write)
-    // Inherit lorebooks from origin chat
-    const originMeta = parseMetadata(originChat);
-    const originLorebookIds = Array.isArray(originMeta.activeLorebookIds) ? originMeta.activeLorebookIds : [];
+    // Inherit lorebooks from the origin
+    const originLorebookIds = origin.lorebookIds;
 
     const existingMeta = parseMetadata(sceneChat);
     await chats.updateMetadata(sceneChat.id, {
       ...existingMeta,
-      sceneOriginChatId: originChatId,
+      ...(origin.chat
+        ? { sceneOriginChatId: origin.chat.id }
+        : { scenePackageOrigin: origin.packageOrigin, ...(packageData ? { scenePackageData: packageData } : {}) }),
       sceneInitiatorCharId: initiatorCharId,
       sceneDescription: plan.description,
       sceneScenario: plan.scenario,
@@ -410,20 +556,77 @@ export async function sceneRoutes(app: FastifyInstance) {
       sceneSystemPrompt: finalSystemPrompt,
       sceneRating: plan.rating,
       sceneStatus: "active",
-      sceneConversationContext: historyText,
+      sceneConversationContext: [origin.notes, historyText].filter(Boolean).join("\n\n"),
       sceneRelationshipHistory: plan.relationshipHistory || null,
       ...(selectedPresetId && presetChoices ? { presetChoices } : {}),
       ...(plan.background ? { background: plan.background } : {}),
       ...(originLorebookIds.length ? { activeLorebookIds: originLorebookIds } : {}),
     });
-    await chats.updateMetadata(originChatId, {
-      ...originMeta,
-      activeSceneChatId: sceneChat.id,
-      sceneBusyCharIds: initiatorCharId ? [initiatorCharId] : finalParticipantIds,
-    });
+    if (origin.chat) {
+      const originId = origin.chat.id;
+      let claimed = false;
+      const originUpdate = await chats.patchMetadata(originId, async (current) => {
+        const active =
+          typeof current.activeSceneChatId === "string" ? await chats.getById(current.activeSceneChatId) : null;
+        if (active && parseMetadata(active).sceneStatus === "active") return {};
+        claimed = true;
+        return { activeSceneChatId: sceneChat.id, sceneBusyCharIds: finalParticipantIds };
+      });
+      if (!originUpdate || !claimed) {
+        await chats.remove(sceneChat.id);
+        return reply.status(originUpdate ? 409 : 404).send({
+          error: originUpdate ? "This Conversation already has an active Scene" : "Origin chat not found",
+        });
+      }
 
-    // Bidirectionally link the chats
-    await chats.connectChats(originChatId, sceneChat.id);
+      // Bidirectionally link the chats
+      await chats.connectChats(originId, sceneChat.id);
+    } else {
+      // The package holds the lock on its own thread. A provider that went away or threw since
+      // planning has claimed nothing, so the scene chat is discarded.
+      const packageOrigin = origin.packageOrigin!;
+      const provider = getCapabilitySceneOrigin(packageOrigin.packageId);
+      let claim: "claimed" | "busy" | "failed" = "failed";
+      let pendingClaim: Promise<boolean> | null = null;
+      try {
+        // A package without `claim` holds no lock: every scene it starts is admitted.
+        if (provider && !provider.claim) claim = "claimed";
+        else if (provider) {
+          pendingClaim = Promise.resolve(
+            provider.claim!(packageOrigin.originId, {
+              sceneChatId: sceneChat.id,
+              characterIds: finalParticipantIds,
+              data: packageData,
+            }),
+          );
+          claim = (await withDeadline(pendingClaim, "Scene origin claim", SCENE_ORIGIN_TIMEOUT_MS))
+            ? "claimed"
+            : "busy";
+        }
+      } catch (error) {
+        logger.warn({ err: error, ...packageOrigin }, "[scene] Package origin claim failed");
+      }
+      if (claim !== "claimed") {
+        await chats.remove(sceneChat.id);
+        // A claim that answers after the deadline may still take the lock: hand it straight back.
+        if (claim === "failed" && pendingClaim)
+          void pendingClaim
+            .then((claimedLate) =>
+              claimedLate
+                ? releaseScenePackageOrigin(packageOrigin, {
+                    kind: "deleted",
+                    sceneChatId: sceneChat.id,
+                    data: packageData,
+                  })
+                : undefined,
+            )
+            .catch(() => undefined);
+        return reply.status(claim === "busy" ? 409 : 503).send({
+          error:
+            claim === "busy" ? "This thread already has an active Scene" : "This package cannot start scenes right now",
+        });
+      }
+    }
 
     // 1. Inject participation guide as a narrator message (visible to user, OOC guidance)
     if (plan.participationGuide) {
@@ -436,7 +639,10 @@ export async function sceneRoutes(app: FastifyInstance) {
     }
 
     // 2. Inject description + firstMessage as the opening character message
-    const firstMsgCharId = initiatorCharId ?? finalParticipantIds[0] ?? null;
+    const firstMsgCharId =
+      initiatorCharId && finalParticipantIds.includes(initiatorCharId)
+        ? initiatorCharId
+        : (finalParticipantIds[0] ?? null);
     const firstMsgParts = [plan.description, "", plan.firstMessage].filter(Boolean);
     await chats.createMessage({
       chatId: sceneChat.id,
@@ -466,10 +672,11 @@ export async function sceneRoutes(app: FastifyInstance) {
     const sceneMeta = parseMetadata(sceneChat);
 
     const originChatId = typeof sceneMeta.sceneOriginChatId === "string" ? sceneMeta.sceneOriginChatId : null;
-    if (!originChatId) return reply.status(400).send({ error: "Not a scene chat (no origin)" });
+    const packageOrigin = originChatId ? null : parseScenePackageOrigin(sceneMeta.scenePackageOrigin);
+    if (!originChatId && !packageOrigin) return reply.status(400).send({ error: "Not a scene chat (no origin)" });
     // Fetched only for the persona game guard — step 4 below re-fetches the
     // origin fresh, since this snapshot is stale by the time the LLM returns.
-    const sceneOriginChat = await chats.getById(originChatId);
+    const sceneOriginChat = originChatId ? await chats.getById(originChatId) : null;
 
     // Resolve connection
     const { conn, baseUrl } = await resolveConnection(connections, connectionId, sceneChat.connectionId);
@@ -482,15 +689,21 @@ export async function sceneRoutes(app: FastifyInstance) {
     const { personaName, personaCtx } = await buildPersonaContext(
       chars,
       sceneChat.personaId,
-      sceneOriginChat?.mode,
+      packageOrigin ? "conversation" : sceneOriginChat?.mode,
       sceneChat.personaCharacterId,
     );
 
     // Get all scene messages for the summary
     const sceneMessages = await getRecentMessages(chats, sceneChatId, 100);
-    const sceneText = sceneMessages
-      .map((m) => `${m.role === "user" ? personaName : "Character"}: ${m.content}`)
-      .join("\n\n");
+    const sceneText = (
+      await Promise.all(
+        sceneMessages.map(async (m) => {
+          const speaker =
+            m.role === "user" ? personaName : m.characterId ? await getCharacterName(chars, m.characterId) : "Narrator";
+          return `${speaker}: ${m.content}`;
+        }),
+      )
+    ).join("\n\n");
 
     // Build the summary prompt
     const now = new Date();
@@ -526,6 +739,7 @@ export async function sceneRoutes(app: FastifyInstance) {
           ``,
           `Write a vivid but concise narrative summary of what happened during this scene (max 200 words).`,
           `Write in past tense, third person. Include the emotional beats and key moments.`,
+          `Use an outside narrator's point of view. Name the participant whose thoughts or feelings you describe, and do not present this recap as dialogue spoken by a character.`,
           `This summary will become a permanent memory for the character(s) involved.`,
           `Do NOT use asterisks, em-dashes, or markdown formatting. Write natural prose.`,
           `Start directly with the narrative — no preamble like "Here's a summary".`,
@@ -556,16 +770,20 @@ export async function sceneRoutes(app: FastifyInstance) {
       return reply.status(502).send({ error: "Scene summary failed: the model returned an empty response." });
     }
 
-    // 1. Inject the summary as a message in the ORIGIN conversation
-    const sceneInitiatorCharId =
-      typeof sceneMeta.sceneInitiatorCharId === "string" ? sceneMeta.sceneInitiatorCharId : null;
-    const initiatorCharId = sceneInitiatorCharId ?? characterIds[0] ?? null;
-    await chats.createMessage({
-      chatId: originChatId,
-      role: "narrator",
-      characterId: null,
-      content: `*${personaName} and ${await getCharacterName(chars, initiatorCharId ?? "")} returned from their scene...*\n\n${summary}`,
-    });
+    // 1. Inject the summary as a message in the ORIGIN conversation. A package origin gets it in step 4.
+    if (originChatId) {
+      const sceneInitiatorCharId =
+        typeof sceneMeta.sceneInitiatorCharId === "string" && characterIds.includes(sceneMeta.sceneInitiatorCharId)
+          ? sceneMeta.sceneInitiatorCharId
+          : null;
+      const initiatorCharId = sceneInitiatorCharId ?? characterIds[0] ?? null;
+      await chats.createMessage({
+        chatId: originChatId,
+        role: "narrator",
+        characterId: null,
+        content: `*${personaName} and ${await getCharacterName(chars, initiatorCharId ?? "")} returned from their scene...*\n\n${summary}`,
+      });
+    }
 
     // 2. Store as a permanent memory on each participating character
     for (const charId of characterIds) {
@@ -595,17 +813,26 @@ export async function sceneRoutes(app: FastifyInstance) {
       }
     }
 
-    // 3. Mark scene as concluded
-    await chats.updateMetadata(sceneChatId, { ...sceneMeta, sceneStatus: "concluded" });
+    // 3. Mark scene as concluded. A package origin can read the recap here if it missed the release.
+    await chats.updateMetadata(sceneChatId, {
+      ...sceneMeta,
+      sceneStatus: "concluded",
+      ...(packageOrigin ? { sceneSummary: summary } : {}),
+    });
 
-    // 4. Clean up origin chat metadata — remove scene busy state
-    const originChat = await chats.getById(originChatId);
-    if (originChat) {
-      const originMeta = parseMetadata(originChat);
-      delete originMeta.activeSceneChatId;
-      delete originMeta.sceneBusyCharIds;
-      await chats.updateMetadata(originChatId, originMeta);
-    }
+    // 4. Clean up origin chat metadata — remove scene busy state, or hand a package origin its recap
+    if (originChatId) await releaseSceneParticipants(originChatId, sceneChatId);
+    else
+      await releaseScenePackageOrigin(packageOrigin!, {
+        data: parseStoredScenePackageData(sceneMeta),
+        kind: "concluded",
+        sceneChatId,
+        summary,
+        description: typeof sceneMeta.sceneDescription === "string" ? sceneMeta.sceneDescription : null,
+        scenario: typeof sceneMeta.sceneScenario === "string" ? sceneMeta.sceneScenario : null,
+        rating: sceneMeta.sceneRating === "sfw" ? "sfw" : "nsfw",
+        characterIds,
+      });
 
     // 5. Disconnect the chats (scene is over, no longer linked)
     await chats.disconnectChat(sceneChatId);
@@ -613,6 +840,7 @@ export async function sceneRoutes(app: FastifyInstance) {
     return {
       summary,
       originChatId,
+      packageOrigin,
     } satisfies SceneConcludeResponse;
   });
 
@@ -627,16 +855,11 @@ export async function sceneRoutes(app: FastifyInstance) {
     const sceneMeta = parseMetadata(sceneChat);
 
     const originChatId = typeof sceneMeta.sceneOriginChatId === "string" ? sceneMeta.sceneOriginChatId : null;
-    if (!originChatId) return reply.status(400).send({ error: "Not a scene chat (no origin)" });
+    const packageOrigin = originChatId ? null : parseScenePackageOrigin(sceneMeta.scenePackageOrigin);
+    if (!originChatId && !packageOrigin) return reply.status(400).send({ error: "Not a scene chat (no origin)" });
 
     // 1. Clean up origin chat metadata — remove scene busy state
-    const originChat = await chats.getById(originChatId);
-    if (originChat) {
-      const originMeta = parseMetadata(originChat);
-      delete originMeta.activeSceneChatId;
-      delete originMeta.sceneBusyCharIds;
-      await chats.updateMetadata(originChatId, originMeta);
-    }
+    if (originChatId) await releaseSceneParticipants(originChatId, sceneChatId);
 
     // 2. Disconnect the chats
     await chats.disconnectChat(sceneChatId);
@@ -644,7 +867,15 @@ export async function sceneRoutes(app: FastifyInstance) {
     // 3. Delete the scene chat entirely
     await chats.remove(sceneChatId);
 
-    return { originChatId };
+    // 4. A package thread unlocks only once the scene chat is gone, so it can never take a second scene early.
+    if (packageOrigin)
+      await releaseScenePackageOrigin(packageOrigin, {
+        kind: "abandoned",
+        sceneChatId,
+        data: parseStoredScenePackageData(sceneMeta),
+      });
+
+    return { originChatId, packageOrigin } satisfies SceneAbandonResponse;
   });
 
   // Copy an active scene into a standalone roleplay chat. Clone leaves the
@@ -673,15 +904,16 @@ export async function sceneRoutes(app: FastifyInstance) {
 
     const sceneMeta = parseMetadata(sceneChat);
     const originChatId = typeof sceneMeta.sceneOriginChatId === "string" ? sceneMeta.sceneOriginChatId : null;
+    const packageOrigin = originChatId ? null : parseScenePackageOrigin(sceneMeta.scenePackageOrigin);
     const isActiveScene = sceneMeta.sceneStatus === "active";
     // Clone accepts inactive scene-like chats with an origin so old scene
     // transcripts can still be recovered into standalone roleplay chats.
-    if (!isActiveScene && !originChatId) {
+    if (!isActiveScene && !originChatId && !packageOrigin) {
       return reply.status(400).send({ error: "Not a scene chat" });
     }
     // Convert needs an origin to clear active scene state; clone can copy an
     // orphaned scene-like chat without altering its source.
-    if (mode === "convert" && !originChatId) {
+    if (mode === "convert" && !originChatId && !packageOrigin) {
       return reply.status(400).send({ error: "convert requires originChatId" });
     }
     const originGroupId = originChatId ? (await chats.getById(originChatId))?.groupId : null;
@@ -804,18 +1036,20 @@ export async function sceneRoutes(app: FastifyInstance) {
       await chats.createMessagesBatch(newChat.id, copiedMessages);
 
       if (mode === "convert" && originChatId) {
-        const originChat = await chats.getById(originChatId);
-        if (originChat) {
-          const originMeta = parseMetadata(originChat);
-          delete originMeta.activeSceneChatId;
-          delete originMeta.sceneBusyCharIds;
-          await chats.updateMetadata(originChatId, originMeta);
-        } else {
+        if (!(await releaseSceneParticipants(originChatId, sceneChatId))) {
           logger.info("[scene/fork] Origin chat %s missing during convert of scene %s", originChatId, sceneChatId);
         }
 
         await chats.disconnectChat(sceneChatId);
         await chats.remove(sceneChatId);
+      } else if (mode === "convert" && packageOrigin) {
+        await chats.disconnectChat(sceneChatId);
+        await chats.remove(sceneChatId);
+        await releaseScenePackageOrigin(packageOrigin, {
+          kind: "converted",
+          sceneChatId,
+          data: parseStoredScenePackageData(sceneMeta),
+        });
       }
     } catch (err) {
       try {
@@ -830,6 +1064,7 @@ export async function sceneRoutes(app: FastifyInstance) {
     return {
       chatId: newChat.id,
       originChatId,
+      packageOrigin,
       mode,
     } satisfies SceneForkResponse;
   });
@@ -842,8 +1077,8 @@ export async function sceneRoutes(app: FastifyInstance) {
     const promptPreferences = normalizeScenePromptPreferences(req.body.promptPreferences);
     const promptPreferencesText = formatScenePromptPreferences(promptPreferences);
 
-    const chat = await chats.getById(chatId);
-    if (!chat) return reply.status(404).send({ error: "Chat not found" });
+    const origin = await resolveSceneOrigin(chatId, req.body.packageOrigin, "Chat not found");
+    if ("error" in origin) return reply.status(origin.status).send({ error: origin.error });
 
     const promptPresetId = req.body.promptPreferences?.promptPresetId;
     if (promptPresetId !== undefined && promptPresetId !== null && typeof promptPresetId !== "string")
@@ -861,17 +1096,19 @@ export async function sceneRoutes(app: FastifyInstance) {
     )
       return reply.status(400).send({ error: "Invalid scene preset choices" });
 
-    const { conn, baseUrl } = await resolveConnection(connections, connectionId, chat.connectionId);
+    const participants = await resolveSceneParticipants(origin, req.body.promptPreferences ?? {});
+    if ("error" in participants) return reply.status(400).send({ error: participants.error });
+
+    const { conn, baseUrl } = await resolveConnection(connections, connectionId, origin.connectionId);
     const provider = await createSceneProvider(conn, baseUrl, createReplyFallbackNotifier(reply));
 
-    const characterIds: string[] =
-      typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : (chat.characterIds as string[]);
+    const characterIds = participants.characterIds;
     const characterCtx = await buildCharacterContext(chars, characterIds);
     const { personaName, personaCtx } = await buildPersonaContext(
       chars,
-      chat.personaId,
-      chat.mode,
-      chat.personaCharacterId,
+      participants.personaId,
+      origin.mode,
+      participants.personaCharacterId,
     );
 
     // Get available backgrounds
@@ -881,11 +1118,17 @@ export async function sceneRoutes(app: FastifyInstance) {
         ? `Available backgrounds: ${availableBackgrounds.join(", ")}`
         : `No backgrounds uploaded. Set background to null.`;
 
+    const { personaName: historyPersonaName } = await buildPersonaContext(
+      chars,
+      origin.personaId,
+      origin.mode,
+      origin.personaCharacterId,
+    );
+
     // Get recent conversation for context
-    const recentMsgs = await getRecentMessages(chats, chatId, 20);
-    const historyText = recentMsgs
-      .map((m) => `${m.role === "user" ? personaName : "Character"}: ${stripConversationPromptTimestamps(m.content)}`)
-      .join("\n\n");
+    const historyText = (await origin.history(20, { persona: historyPersonaName, character: "Character" })).join(
+      "\n\n",
+    );
 
     const planPrompt: [ChatMessage, ChatMessage] = [
       {
@@ -910,6 +1153,7 @@ export async function sceneRoutes(app: FastifyInstance) {
           bgListStr,
           `</backgrounds>`,
           ``,
+          ...(origin.notes ? [`<origin_context>`, origin.notes, `</origin_context>`, ``] : []),
           `Recent conversation:`,
           historyText.slice(-2000),
         ].join("\n"),
@@ -941,6 +1185,9 @@ export async function sceneRoutes(app: FastifyInstance) {
           `- The "description" IS shown. Keep it atmospheric but don't spoil the plot.`,
           `- The "background" must be an EXACT filename from the available backgrounds list (case-sensitive, including extension). If no background fits, set it to null. Do NOT invent or modify filenames.`,
           `- The "firstMessage" should be written in character, not as a narrator. Make it engaging.`,
+          req.body.promptPreferences?.participantCharacterIds !== undefined
+            ? `- Include exactly the selected participants in available_character_ids. Do not add or remove participants.`
+            : "",
           `- The "systemPrompt" defines HOW the roleplay is written. Be specific about style.`,
           promptPreferences
             ? `- The user's selected POV and tense are mandatory. Use them consistently in both "systemPrompt" and "firstMessage".`
@@ -964,9 +1211,9 @@ export async function sceneRoutes(app: FastifyInstance) {
         // Reuse preset instructions/macros, without expanding live chat, lore, or agent markers.
         sections: sections.filter((section) => section.isMarker !== "true"),
         chatChoices: { ...(parsePromptPresetChoices(preset.defaultChoices) ?? {}), ...(presetChoices ?? {}) },
-        chatId,
+        chatId: origin.chat?.id ?? "",
         characterIds,
-        personaId: chat.personaId,
+        personaId: participants.personaId,
         personaName,
         personaDescription: personaCtx,
         chatMessages: [],
@@ -1035,6 +1282,10 @@ export async function sceneRoutes(app: FastifyInstance) {
     // Only accept the background if it actually exists on disk
     const validBg = chosenBg && availableBackgrounds.includes(chosenBg) ? chosenBg : null;
 
+    const plannedParticipants = [
+      ...new Set(parseCharacterIds(parsed.characterIds).filter((id) => characterIds.includes(id))),
+    ];
+
     const fullPlan: SceneFullPlan = {
       name: (() => {
         const raw = String(parsed.name || (prompt || "A new scene").slice(0, 50));
@@ -1045,9 +1296,11 @@ export async function sceneRoutes(app: FastifyInstance) {
       firstMessage: String(parsed.firstMessage || "*The scene begins...*"),
       background: validBg,
       characterIds:
-        Array.isArray(parsed.characterIds) && parsed.characterIds.length > 0
-          ? parsed.characterIds.map(String)
-          : characterIds,
+        req.body.promptPreferences?.participantCharacterIds !== undefined
+          ? characterIds
+          : plannedParticipants.length
+            ? plannedParticipants
+            : characterIds,
       systemPrompt: String(
         parsed.systemPrompt || "Write in third person, past tense. Use vivid descriptions. Freeform roleplay.",
       ),

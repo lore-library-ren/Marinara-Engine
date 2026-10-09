@@ -104,7 +104,7 @@ try {
   const legacyManifest = capabilityPackageManifestSchema.parse(installedPackage("legacy", ["agent"]).manifest);
   assert.equal(legacyManifest.schemaVersion, 1, "Existing manifest v1 packages must remain readable");
   assert.equal(getCapabilityApiCompatibilityIssue(legacyManifest), null);
-  assert.deepEqual(supportedCapabilityApi, { major: 1, minor: 18 });
+  assert.deepEqual(supportedCapabilityApi, { major: 1, minor: 66 });
 
   const manifestV2 = capabilityPackageManifestSchema.parse({
     ...legacyManifest,
@@ -140,20 +140,20 @@ try {
   });
   assert.match(
     getCapabilityApiCompatibilityIssue(unsupportedMajorManifest) ?? "",
-    /requires capability API 2\.0; this Engine supports 1\.18/,
+    /requires capability API 2\.0; this Engine supports 1\.66/,
   );
   const currentMinorManifest = capabilityPackageManifestSchema.parse({
     ...manifestV2,
-    capabilityApi: { major: 1, minor: 18 },
+    capabilityApi: { major: 1, minor: 28 },
   });
   assert.equal(getCapabilityApiCompatibilityIssue(currentMinorManifest), null);
   const unsupportedMinorManifest = capabilityPackageManifestSchema.parse({
     ...manifestV2,
-    capabilityApi: { major: 1, minor: 19 },
+    capabilityApi: { major: 1, minor: 67 },
   });
   assert.match(
     getCapabilityApiCompatibilityIssue(unsupportedMinorManifest) ?? "",
-    /requires capability API 1\.19; this Engine supports 1\.18/,
+    /requires capability API 1\.67; this Engine supports 1\.66/,
   );
   const startupManifest = {
     ...currentMinorManifest,
@@ -622,7 +622,7 @@ try {
   deactivateReactivatedRoutes();
   deactivateInitialRoutes();
 
-  const { withLongTermMemoryRuntimeTimeout } =
+  const { withLongTermMemoryEmbeddingChange, withLongTermMemoryRuntimeTimeout } =
     await import("../../packages/server/src/services/generation/long-term-memory-runtime.js");
   const timeoutStartedAt = Date.now();
   await assert.rejects(
@@ -639,6 +639,16 @@ try {
     capabilityLanguageModelSource,
     /reasoningEffort:\s*options\.reasoningEffort,/u,
     "Capability model calls must preserve an explicit reasoning effort of none",
+  );
+  assert.match(
+    capabilityLanguageModelSource,
+    /AbortSignal\.any\(\[options\.signal,\s*timeoutSignal\]\)[\s\S]*withLlmRequestTimeout\(\s*timeoutMs,\s*async\s*\(\)\s*=>[\s\S]*provider\.chatComplete\(/u,
+    "Capability model calls must enforce AGENT_CALL_TIMEOUT_MS as a total-duration cap while scoping the transport timeout",
+  );
+  assert.match(
+    capabilityLanguageModelSource,
+    /const\s+timeoutSignal\s*=\s*AbortSignal\.timeout\(\s*timeoutMs\s*\);/u,
+    "Capability model calls must build their deadline signal from AbortSignal.timeout",
   );
   assert.doesNotMatch(
     capabilityLanguageModelSource,
@@ -1410,7 +1420,7 @@ try {
   );
   if (configuredDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = configuredDataDir;
-  const { getCapabilityService } =
+  const { getCapabilityService, registerCapabilityService } =
     await import("../../packages/server/src/services/capability-packages/capability-service-registry.service.js");
   const { closeDB, getDB } = await import("../../packages/server/src/db/connection.js");
   closeDatabase = closeDB;
@@ -1456,6 +1466,41 @@ try {
     caseDistinctEmbeddingHost.spaceId,
     "opaque embedding model IDs must retain case distinctions",
   );
+  // Engine save/header contract only; reuse the existing connection fixture.
+  let refreshedModel: string | undefined;
+  const refreshHeaders: unknown[][] = [];
+  const refreshReply = {
+    header(name: string, value: unknown) {
+      refreshHeaders.push([name, value]);
+      return undefined!;
+    },
+  };
+  const releaseRefresh = registerCapabilityService("long-term-memory:runtime", {
+    async refresh({ signal }: { signal: AbortSignal }) {
+      signal.throwIfAborted();
+      refreshedModel = (await connections.getById(remoteEmbeddingConnection.id))?.embeddingModel;
+      if (refreshedModel === "failed-model") throw new Error("Refresh fixture failed");
+      return { status: "refreshed" };
+    },
+  });
+  try {
+    for (const embeddingModel of ["refreshed-model", "refreshed-model", "failed-model"]) {
+      const saved = await withLongTermMemoryEmbeddingChange(db, refreshReply, () =>
+        connections.update(remoteEmbeddingConnection.id, { embeddingModel }),
+      );
+      assert.equal(saved?.embeddingModel, embeddingModel);
+      assert.equal(refreshedModel, embeddingModel, "refresh must observe the persisted save before it returns");
+    }
+    assert.deepEqual(refreshHeaders, [
+      ["X-Marinara-LTM-Refresh", "refreshed"],
+      ["X-Marinara-LTM-Refresh", "failed"],
+    ]);
+  } finally {
+    releaseRefresh();
+    await connections.update(remoteEmbeddingConnection.id, {
+      embeddingModel: remoteEmbeddingConnection.embeddingModel,
+    });
+  }
   const { createCapabilityPersistenceHost } =
     await import("../../packages/server/src/services/capability-packages/capability-persistence.service.js");
   const { createCapabilityResourceHost } =
@@ -1918,7 +1963,9 @@ try {
   assert.equal(getCapabilityService("readiness:success"), null, "Runtime stop must remove ready contributions");
   const runtimeSnapshotsRoot = join(dataDir, "capability-runtime-snapshots");
   assert.equal(
-    existsSync(runtimeSnapshotsRoot) ? readdirSync(runtimeSnapshotsRoot).length : 0,
+    existsSync(runtimeSnapshotsRoot)
+      ? readdirSync(runtimeSnapshotsRoot).filter((entry) => entry !== "node_modules").length
+      : 0,
     0,
     "runtime snapshots are retained during activation and removed at stop",
   );

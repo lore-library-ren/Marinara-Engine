@@ -90,8 +90,7 @@ interface Attachment {
 }
 
 type EmojiCompletion =
-  | ({ kind: "custom" } & ConversationCustomEmoji)
-  | ({ kind: "standard"; source: "Standard" } & StandardEmojiShortcode);
+  ({ kind: "custom" } & ConversationCustomEmoji) | ({ kind: "standard"; source: "Standard" } & StandardEmojiShortcode);
 
 const TEXT_ATTACHMENT_EXTENSIONS = new Set([
   "csv",
@@ -333,7 +332,7 @@ interface ConversationInputProps {
     conversationActivity?: string;
   }>;
   onPeekPrompt?: () => void;
-  onIllustrate?: (prompt?: string) => void | Promise<void>;
+  onIllustrate?: (prompt?: string, messageRange?: [string, string]) => void | Promise<void>;
   onGenerateSelfie?: (characterId?: string) => void | Promise<void>;
 }
 
@@ -731,7 +730,7 @@ export function ConversationInput({
         let rollbackFailed = false;
         if (createdMessageId) {
           try {
-            await deleteMessage.mutateAsync(createdMessageId);
+            await deleteMessage.mutateAsync({ messageId: createdMessageId, skipTrash: true });
           } catch {
             rollbackFailed = true;
           }
@@ -1155,6 +1154,11 @@ export function ConversationInput({
       name: attachment.name,
     }));
 
+    // Cancel the pending draft save so it cannot restore the sent text after clearInputDraft.
+    if (draftTimerRef.current) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
     if (textareaRef.current) {
       textareaRef.current.value = "";
       textareaRef.current.style.height = "auto";
@@ -1851,22 +1855,13 @@ export function ConversationInput({
     [activeChatId, isSendBlocked, generate, insertStickerToken],
   );
   const showDraftTranslateButton = chatMetadata.showInputTranslateButton === true;
-  const showMobileToolsTab =
-    showDraftTranslateButton || speechToTextEnabled || (showQuickRepliesMenu && quickReplyActions.length > 0);
-  const mobilePickerTabs = useMemo<ConversationMediaPickerTab[]>(() => {
-    const tabs: ConversationMediaPickerTab[] = [
-      { id: "emoji", label: "Emoji" },
-      { id: "kaomoji", label: "Kaomoji" },
-      { id: "gifs", label: "GIFs" },
-      { id: "stickers", label: "Stickers" },
-    ];
-    if (showMobileToolsTab) tabs.push({ id: "tools", label: "Tools" });
-    return tabs;
-  }, [showMobileToolsTab]);
-
-  useEffect(() => {
-    if (!showMobileToolsTab && mobilePickerTab === "tools") setMobilePickerTab("emoji");
-  }, [mobilePickerTab, showMobileToolsTab]);
+  const mobilePickerTabs: ConversationMediaPickerTab[] = [
+    { id: "emoji", label: "Emoji" },
+    { id: "kaomoji", label: "Kaomoji" },
+    { id: "gifs", label: "GIFs" },
+    { id: "stickers", label: "Stickers" },
+    { id: "tools", label: t("chat.input.tools") },
+  ];
 
   const handleTranslateDraft = useCallback(async () => {
     if (!activeChatId || isTranslatingDraft) return;
@@ -1944,31 +1939,29 @@ export function ConversationInput({
     mobilePickerTab === "tools" ? (
       <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">
         <div className="grid gap-2">
-          {showDraftTranslateButton && (
-            <button
-              type="button"
-              onClick={() => {
-                setMobilePickerOpen(false);
-                void handleTranslateDraft();
-              }}
-              disabled={!activeChatId || !hasInput || isTranslatingDraft}
-              className={cn(
-                "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors",
-                activeChatId && hasInput && !isTranslatingDraft
-                  ? "text-foreground/80 hover:bg-foreground/10"
-                  : "cursor-not-allowed text-foreground/25",
-              )}
-            >
-              {isTranslatingDraft ? (
-                <Loader2 size="1rem" className="shrink-0 animate-spin" />
-              ) : (
-                <Languages size="1rem" className="shrink-0" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {localizeUi("chat.input.translateDraft")}
-              </span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              setMobilePickerOpen(false);
+              void handleTranslateDraft();
+            }}
+            disabled={!activeChatId || !hasInput || isTranslatingDraft}
+            className={cn(
+              "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors",
+              activeChatId && hasInput && !isTranslatingDraft
+                ? "text-foreground/80 hover:bg-foreground/10"
+                : "cursor-not-allowed text-foreground/25",
+            )}
+          >
+            {isTranslatingDraft ? (
+              <Loader2 size="1rem" className="shrink-0 animate-spin" />
+            ) : (
+              <Languages size="1rem" className="shrink-0" />
+            )}
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              {localizeUi("chat.input.translateDraft")}
+            </span>
+          </button>
 
           {speechToTextEnabled && (
             <div className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-3 py-2">
@@ -2044,7 +2037,10 @@ export function ConversationInput({
     <div className="mari-chat-input chat-input-container relative px-2 sm:px-3 pb-3">
       {/* Slash command autocomplete */}
       {completions.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-[min(18rem,45dvh)] overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg [-webkit-overflow-scrolling:touch]">
+        <div
+          data-chat-input-popup="commands"
+          className="mari-chat-style-surface mari-chat-input-popup absolute bottom-full left-3 right-3 z-40 mb-1 max-h-[min(18rem,45dvh)] overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg [-webkit-overflow-scrolling:touch]"
+        >
           {completions.map((cmd, i) => (
             <button
               key={cmd.key}
@@ -2088,7 +2084,10 @@ export function ConversationInput({
 
       {/* @mention autocomplete */}
       {mentionCompletions.length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 overflow-hidden rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg">
+        <div
+          data-chat-input-popup="mentions"
+          className="mari-chat-style-surface mari-chat-input-popup absolute bottom-full left-0 right-0 mb-1 overflow-hidden rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg"
+        >
           {mentionCompletions.map((name, i) => (
             <button
               key={name}
@@ -2110,7 +2109,10 @@ export function ConversationInput({
 
       {/* :emoji: autocomplete */}
       {emojiCompletions.length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 max-h-56 overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg sm:left-[2%] sm:right-[2%]">
+        <div
+          data-chat-input-popup="emoji-completions"
+          className="mari-chat-style-surface mari-chat-input-popup absolute bottom-full left-0 right-0 mb-1 max-h-56 overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg sm:left-[2%] sm:right-[2%]"
+        >
           {emojiCompletions.map((em, i) => (
             <button
               key={em.name}
@@ -2273,6 +2275,7 @@ export function ConversationInput({
         <textarea
           ref={textareaRef}
           data-chat-composer="true"
+          data-chat-id={activeChatId}
           placeholder={inputPlaceholder}
           rows={1}
           onInput={handleInput}
@@ -2302,20 +2305,8 @@ export function ConversationInput({
                 ? "bg-foreground/10 text-foreground/75 ring-1 ring-foreground/20"
                 : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
             )}
-            title={
-              mobilePickerOpen
-                ? t("chat.input.showKeyboard")
-                : showMobileToolsTab
-                  ? t("chat.input.mediaAndTools")
-                  : t("chat.input.media")
-            }
-            aria-label={
-              mobilePickerOpen
-                ? t("chat.input.showKeyboard")
-                : showMobileToolsTab
-                  ? t("chat.input.mediaAndTools")
-                  : t("chat.input.media")
-            }
+            title={mobilePickerOpen ? t("chat.input.showKeyboard") : t("chat.input.mediaAndTools")}
+            aria-label={mobilePickerOpen ? t("chat.input.showKeyboard") : t("chat.input.mediaAndTools")}
           >
             {mobilePickerOpen ? <Keyboard size="1.25rem" /> : <Smile size="1.25rem" />}
           </button>
@@ -2332,8 +2323,8 @@ export function ConversationInput({
                   ? "bg-foreground/10 text-foreground/75 ring-1 ring-foreground/20"
                   : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
               )}
-              title={t(showMobileToolsTab ? "chat.input.mediaAndTools" : "chat.input.media")}
-              aria-label={t(showMobileToolsTab ? "chat.input.mediaAndTools" : "chat.input.media")}
+              title={t("chat.input.mediaAndTools")}
+              aria-label={t("chat.input.mediaAndTools")}
               aria-expanded={mobilePickerOpen}
             >
               <Smile size="1.25rem" />

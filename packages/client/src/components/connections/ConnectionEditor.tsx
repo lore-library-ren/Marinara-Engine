@@ -1,3 +1,13 @@
+import {
+  DECISION_CONNECTION_TIMEOUT_BOUNDS_MS,
+  DECISION_SOURCES,
+  DECISION_SOURCE_BASE_URLS,
+  DECISION_TIMEOUT_MS,
+  defaultDecisionStateTokens,
+  defaultDecisionTimeoutMs,
+  resolveDecisionConnectionTimeoutMs,
+  type DecisionSource,
+} from "@marinara-engine/shared";
 import { isLanguageGenerationConnection } from "../../lib/connection-filters";
 import { useEffectiveGenerationParameters } from "../../hooks/use-effective-generation-parameters";
 // ──────────────────────────────────────────────
@@ -8,6 +18,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, type ChangeEvent } f
 import { useUIStore } from "../../stores/ui.store";
 import {
   useConnection,
+  useCreateConnection,
   useConnections,
   useUpdateConnection,
   useDeleteConnection,
@@ -16,6 +27,7 @@ import {
   useTestImageGeneration,
   useTestVideoGeneration,
   useDiagnoseClaudeSubscription,
+  useModelParameterCapabilities,
   useFetchModels,
   useSaveConnectionDefaults,
   type ClaudeSubscriptionDiagnosis,
@@ -62,7 +74,17 @@ import {
   createConnectionExportEnvelope,
   type ConnectionTransferRow,
 } from "../../lib/connection-transfer";
+import {
+  connectionFieldsForModelPick,
+  filterConnectionModelOptions,
+  mergeConnectionModelOptions,
+  normalizeGrokCliEditorModel,
+} from "../../lib/connection-model-selection";
 import { DraftNumberInput } from "../ui/DraftNumberInput";
+import { decisionConnectionTestMessage } from "../../lib/decision-test-message";
+import { AtlasCloudModelOptions } from "./AtlasCloudModelOptions";
+import { NanoGptUsageWidget } from "./NanoGptUsageWidget";
+import { SubscriptionCostPill } from "./SubscriptionCostPill";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { SettingsCheckbox, SettingsSwitch } from "../panels/settings/SettingControls";
 import {
@@ -79,6 +101,7 @@ import {
   LOCAL_SIDECAR_CONNECTION_ID,
   MODEL_LISTS,
   IMAGE_GENERATION_SOURCES,
+  CODEX_IMAGE_MODEL,
   ZAI_IMAGE_MODELS,
   VIDEO_GENERATION_SOURCES,
   inferImageSource,
@@ -144,7 +167,6 @@ const MAX_CACHING_AT_DEPTH = 100;
 const DEFAULT_MAX_PARALLEL_JOBS = 1;
 const MAX_PARALLEL_JOBS = 16;
 const GROK_CLI_DEFAULT_CONTEXT_TOKENS = 32_000;
-const STALE_GROK_CLI_MODEL_IDS = new Set(["grok-build-latest", "grok-build-0.1"]);
 const DEFAULT_VIDEO_MODELS: Record<VideoDefaultsService, string> = {
   gemini_omni: "gemini-omni-flash-preview",
   google_veo: "veo-3.1-generate-preview",
@@ -279,6 +301,7 @@ function canProviderTreatAsLocalEndpoint(provider: APIProvider): boolean {
     provider !== "image_generation" &&
     provider !== "video_generation" &&
     provider !== "audio" &&
+    provider !== "decision" &&
     !isLocalAuthConnectionProvider(provider)
   );
 }
@@ -288,13 +311,10 @@ function providerSupportsDirectEmbeddingConfig(provider: APIProvider): boolean {
     provider !== "image_generation" &&
     provider !== "video_generation" &&
     provider !== "audio" &&
+    provider !== "decision" &&
     provider !== "anthropic" &&
     !isLocalAuthConnectionProvider(provider)
   );
-}
-
-function normalizeGrokCliEditorModel(provider: APIProvider, model: string): string {
-  return provider === "grok_subscription" && STALE_GROK_CLI_MODEL_IDS.has(model.trim()) ? "" : model;
 }
 
 function normalizeConnectionMaxContext(provider: APIProvider, value: unknown): number {
@@ -334,6 +354,7 @@ export function ConnectionEditor() {
     !!conn && isLanguageGenerationConnection(conn),
   );
   const updateConnection = useUpdateConnection();
+  const createDecisionConnection = useCreateConnection();
   const deleteConnection = useDeleteConnection();
   const testConnection = useTestConnection();
   const testMessage = useTestMessage();
@@ -361,6 +382,10 @@ export function ConnectionEditor() {
   const [localBaseUrl, setLocalBaseUrl] = useState("");
   const [localApiKey, setLocalApiKey] = useState("");
   const [clearStoredApiKeyOnSave, setClearStoredApiKeyOnSave] = useState(false);
+  /** NanoGPT: usage-only management token (`usage:read`) and the widget toggle. */
+  const [localManagementToken, setLocalManagementToken] = useState("");
+  const [clearStoredManagementTokenOnSave, setClearStoredManagementTokenOnSave] = useState(false);
+  const [localShowUsageWidget, setLocalShowUsageWidget] = useState(false);
   const [localModel, setLocalModel] = useState("");
   const [localMaxContext, setLocalMaxContext] = useState(128000);
   const [localMaxParallelJobs, setLocalMaxParallelJobs] = useState(DEFAULT_MAX_PARALLEL_JOBS);
@@ -382,6 +407,10 @@ export function ConnectionEditor() {
   const [localImageGenerationQuality, setLocalImageGenerationQuality] = useState<ImageGenerationQuality>("auto");
   const [localVideoGenerationSource, setLocalVideoGenerationSource] = useState("");
   const [localVideoService, setLocalVideoService] = useState<string | null>(null);
+  const [localDecisionSource, setLocalDecisionSource] = useState<DecisionSource>("typesafe");
+  const [localCredentialsFrom, setLocalCredentialsFrom] = useState("");
+  const [localMaxStateTokens, setLocalMaxStateTokens] = useState(30000);
+  const [localDecisionTimeoutMs, setLocalDecisionTimeoutMs] = useState<number>(DECISION_TIMEOUT_MS.systemOne);
   const [localAudioSource, setLocalAudioSource] = useState("elevenlabs");
   const [localAudioVoice, setLocalAudioVoice] = useState("");
   const [localAudioSoundEffects, setLocalAudioSoundEffects] = useState(false);
@@ -401,6 +430,7 @@ export function ConnectionEditor() {
   const [videoDefaultsExpanded, setVideoDefaultsExpanded] = useState(false);
 
   // Test results
+  const testScopeRef = useRef(0);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; latencyMs: number } | null>(null);
   const [msgResult, setMsgResult] = useState<{
     success: boolean;
@@ -461,6 +491,9 @@ export function ConnectionEditor() {
     setLocalBaseUrl((c.baseUrl as string) ?? "");
     setLocalApiKey(""); // never pre-fill (it's masked)
     setClearStoredApiKeyOnSave(false);
+    setLocalManagementToken(""); // never pre-fill (it's masked)
+    setClearStoredManagementTokenOnSave(false);
+    setLocalShowUsageWidget(c.showUsageWidget === "true" || c.showUsageWidget === true);
     setLocalModel(normalizeGrokCliEditorModel(provider, model));
     setLocalMaxContext(normalizeConnectionMaxContext(provider, c.maxContext));
     setLocalMaxParallelJobs(normalizeMaxParallelJobs(c.maxParallelJobs));
@@ -512,6 +545,10 @@ export function ConnectionEditor() {
     setLocalImageGenerationQuality(resolveOpenAIImageQuality(c.imageGenerationQuality, model));
     setLocalVideoGenerationSource(videoProviderSource);
     setLocalVideoService(videoDefaultsService);
+    setLocalDecisionSource((c.decisionSource as DecisionSource) ?? "typesafe");
+    setLocalCredentialsFrom((c.credentialsFromConnectionId as string) ?? "");
+    setLocalMaxStateTokens(Number(c.maxStateTokens ?? defaultDecisionStateTokens(c.decisionSource as string)));
+    setLocalDecisionTimeoutMs(resolveDecisionConnectionTimeoutMs(c.decisionTimeoutMs, c.decisionSource as string));
     setLocalAudioSource((c.audioSource as string) || "elevenlabs");
     setLocalAudioVoice((c.audioVoice as string) ?? "");
     setLocalAudioSoundEffects(c.audioSoundEffects === "true" || c.audioSoundEffects === true);
@@ -523,7 +560,9 @@ export function ConnectionEditor() {
     setLocalDefaultParametersEnabled(
       !!parseEditableGenerationParameters(c.defaultParameters) || Object.keys(imageCaptioningDefaults).length > 0,
     );
-    setLocalDefaultParameters(getEditableGenerationParameters(CONNECTION_PARAMETER_DEFAULTS, c.defaultParameters));
+    setLocalDefaultParameters(
+      getEditableGenerationParameters(CONNECTION_PARAMETER_DEFAULTS, c.defaultParameters, c.provider as string),
+    );
     setLocalImageCaptioningEnabled(imageCaptioningDefaults.imageCaptioningEnabled === true);
     setLocalImageCaptioningConnectionId(imageCaptioningDefaults.imageCaptioningConnectionId ?? "");
     const nextImageDefaults = defaultsService
@@ -542,12 +581,18 @@ export function ConnectionEditor() {
     setVideoDefaultsExpanded(!!storedVideoDefaults);
     setDirty(false);
     setSaveError(null);
+  }, [conn]);
+
+  // Saving before a test refetches `conn`; that hydration can finish after the test.
+  // Clear results when changing the selected connection, not on its save/refetch.
+  useEffect(() => {
+    testScopeRef.current++;
     setTestResult(null);
     setMsgResult(null);
     setImgTestResult(null);
     setVidTestResult(null);
     setClaudeDiagResult(null);
-  }, [conn]);
+  }, [connectionDetailId]);
 
   const comfyWorkflowValidation = useMemo(() => {
     const wf = localComfyuiWorkflow;
@@ -636,6 +681,8 @@ export function ConnectionEditor() {
       ? localImageGenerationSource || localImageService || effectiveImageGenerationSource
       : "";
   const selectedImageDefaultsService = imageSourceToDefaultsService(selectedImageService);
+  // Signs in with the local codex login, so there is no API key or Base URL to edit.
+  const isCodexImageService = selectedImageService === "codex_chatgpt";
   const supportsGptImageQuality =
     localProvider === "image_generation" && selectedImageService === "openai" && isOpenAIGptImageModel(localModel);
   const effectiveImageGenerationQuality = resolveOpenAIImageQuality(localImageGenerationQuality, localModel);
@@ -666,29 +713,31 @@ export function ConnectionEditor() {
           ? { label: "Get your Venice API key", url: "https://venice.ai/settings/api" }
           : localProvider === "image_generation" && selectedImageService === "zai"
             ? { label: t("connections.mediaSources.zai.apiKeyLink"), url: "https://z.ai/manage-apikey/apikey-list" }
-            : (localProvider === "image_generation" && selectedImageService === "atlas") ||
-                (localProvider === "video_generation" && selectedVideoDefaultsService === "atlas")
-              ? {
-                  label: t("connections.mediaSources.atlas.apiKeyLink"),
-                  url: "https://www.atlascloud.ai/user/api-keys",
-                }
-              : localProvider === "video_generation" && selectedVideoDefaultsService === "xai"
-                ? API_KEY_LINKS.xai
-                : localProvider === "video_generation" && selectedVideoDefaultsService === "openrouter"
-                  ? selectedVideoProvider === "nanogpt"
-                    ? API_KEY_LINKS.nanogpt
-                    : API_KEY_LINKS.openrouter
-                  : localProvider === "video_generation" && selectedVideoDefaultsService === "seedance"
-                    ? { label: "Open Seedance API docs", url: "https://seedance2.ai/api-docs" }
-                    : localProvider === "video_generation" &&
-                        (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui")
-                      ? undefined
-                      : localProvider === "zai"
-                        ? {
-                            label: t("connections.mediaSources.zai.apiKeyLink"),
-                            url: "https://z.ai/manage-apikey/apikey-list",
-                          }
-                        : API_KEY_LINKS[localProvider];
+            : localProvider === "image_generation" && selectedImageService === "fal"
+              ? { label: t("connections.mediaSources.fal.apiKeyLink"), url: "https://fal.ai/dashboard/keys" }
+              : (localProvider === "image_generation" && selectedImageService === "atlas") ||
+                  (localProvider === "video_generation" && selectedVideoDefaultsService === "atlas")
+                ? {
+                    label: t("connections.mediaSources.atlas.apiKeyLink"),
+                    url: "https://www.atlascloud.ai/user/api-keys",
+                  }
+                : localProvider === "video_generation" && selectedVideoDefaultsService === "xai"
+                  ? API_KEY_LINKS.xai
+                  : localProvider === "video_generation" && selectedVideoDefaultsService === "openrouter"
+                    ? selectedVideoProvider === "nanogpt"
+                      ? API_KEY_LINKS.nanogpt
+                      : API_KEY_LINKS.openrouter
+                    : localProvider === "video_generation" && selectedVideoDefaultsService === "seedance"
+                      ? { label: "Open Seedance API docs", url: "https://seedance2.ai/api-docs" }
+                      : localProvider === "video_generation" &&
+                          (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui")
+                        ? undefined
+                        : localProvider === "zai"
+                          ? {
+                              label: t("connections.mediaSources.zai.apiKeyLink"),
+                              url: "https://z.ai/manage-apikey/apikey-list",
+                            }
+                          : API_KEY_LINKS[localProvider];
 
   useEffect(() => {
     if (localProvider !== "image_generation" || !selectedImageDefaultsService) {
@@ -727,28 +776,22 @@ export function ConnectionEditor() {
   }, [localProvider, selectedVideoProvider, selectedImageService]);
 
   // Merge known models with remote models (remote first, deduped)
-  const allModels = useMemo(() => {
-    const remote = remoteModels.map((m) => ({
-      id: m.id,
-      name: m.name,
-      context: m.context ?? 0,
-      maxOutput: m.maxOutput ?? 0,
-      isRemote: true as const,
-    }));
-    const remoteIds = new Set(remote.map((m) => m.id));
-    const known = providerModels.filter((m) => !remoteIds.has(m.id)).map((m) => ({ ...m, isRemote: false as const }));
-    return [...remote, ...known];
-  }, [providerModels, remoteModels]);
+  const allModels = useMemo(
+    () => mergeConnectionModelOptions(remoteModels, providerModels),
+    [providerModels, remoteModels],
+  );
 
-  const filteredModels = useMemo(() => {
-    if (!modelSearch.trim()) return allModels;
-    const q = modelSearch.toLowerCase();
-    return allModels.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
-  }, [allModels, modelSearch]);
+  const filteredModels = useMemo(() => filterConnectionModelOptions(allModels, modelSearch), [allModels, modelSearch]);
 
   const selectedModelInfo = useMemo(() => {
     return allModels.find((m) => m.id === localModel) ?? null;
   }, [allModels, localModel]);
+  const catalogModelCapabilities = useModelParameterCapabilities(
+    connectionDetailId ? { id: connectionDetailId, provider: localProvider, model: localModel } : null,
+  );
+  const selectedModelCapabilities =
+    (selectedModelInfo && "capabilities" in selectedModelInfo ? (selectedModelInfo.capabilities ?? null) : null) ??
+    catalogModelCapabilities;
 
   // Clear remote models when provider changes
   useEffect(() => {
@@ -809,7 +852,7 @@ export function ConnectionEditor() {
     const isImageProvider = localProvider === "image_generation";
     const isVideoProvider = localProvider === "video_generation";
     const isAudioProvider = localProvider === "audio";
-    const isMediaProvider = isImageProvider || isVideoProvider || isAudioProvider;
+    const isMediaProvider = isImageProvider || isVideoProvider || isAudioProvider || localProvider === "decision";
     const isLocalAuthProvider = isLocalAuthConnectionProvider(localProvider);
     const canTreatAsLocalEndpoint = canProviderTreatAsLocalEndpoint(localProvider);
     const existingEmbeddingModel = (conn as { embeddingModel?: string | null } | undefined)?.embeddingModel ?? "";
@@ -826,7 +869,9 @@ export function ConnectionEditor() {
       maxRequestsPerMinute: localMaxRequestsPerMinute,
       enableCaching: localEnableCaching,
       anthropicExtendedCacheTtl:
-        localProvider === "anthropic" && localEnableCaching ? localAnthropicExtendedCacheTtl : false,
+        (localProvider === "anthropic" && localEnableCaching) || localProvider === "claude_subscription"
+          ? localAnthropicExtendedCacheTtl
+          : false,
       cachingAtDepth: localCachingAtDepth,
       defaultForAgents: localDefaultForAgents,
       embeddingModel: supportsDirectEmbeddings ? localEmbeddingModel : existingEmbeddingModel,
@@ -854,6 +899,14 @@ export function ConnectionEditor() {
       maxTokensOverride: localMaxTokensOverride ?? null,
       claudeFastMode: localClaudeFastMode,
       treatAsLocalEndpoint: canTreatAsLocalEndpoint ? localTreatAsLocalEndpoint : false,
+      decisionSource: localProvider === "decision" ? localDecisionSource : null,
+      credentialsFromConnectionId: localProvider === "decision" ? localCredentialsFrom || null : null,
+      maxStateTokens: localProvider === "decision" ? localMaxStateTokens : null,
+      // The default is stored as null, so a connection that never chose a limit follows it.
+      decisionTimeoutMs:
+        localProvider === "decision" && localDecisionTimeoutMs !== defaultDecisionTimeoutMs(localDecisionSource)
+          ? localDecisionTimeoutMs
+          : null,
       audioSource: isAudioProvider ? localAudioSource || null : null,
       audioVoice: isAudioProvider ? localAudioVoice || null : null,
       // Only ElevenLabs can generate game sound effects / music today.
@@ -867,6 +920,15 @@ export function ConnectionEditor() {
       payload.apiKey = localApiKey;
     } else if (clearStoredApiKeyOnSave) {
       payload.apiKey = "";
+    }
+    // NanoGPT management token: scoped to nanogpt, and only sent when retyped.
+    payload.showUsageWidget = localProvider === "nanogpt" && localShowUsageWidget;
+    if (localProvider !== "nanogpt") {
+      payload.managementToken = "";
+    } else if (localManagementToken.trim()) {
+      payload.managementToken = localManagementToken;
+    } else if (clearStoredManagementTokenOnSave) {
+      payload.managementToken = "";
     }
     try {
       // Persist media/default parameters first. The main connection save runs
@@ -921,6 +983,10 @@ export function ConnectionEditor() {
       }
       setDirty(false);
       setClearStoredApiKeyOnSave(false);
+      // The token is only sent when retyped, so clear it after a successful
+      // save; otherwise it would ride along on every later save.
+      setLocalManagementToken("");
+      setClearStoredManagementTokenOnSave(false);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (err) {
@@ -936,6 +1002,9 @@ export function ConnectionEditor() {
     baseUrlValidation,
     localApiKey,
     clearStoredApiKeyOnSave,
+    localManagementToken,
+    clearStoredManagementTokenOnSave,
+    localShowUsageWidget,
     localModel,
     localMaxContext,
     localMaxParallelJobs,
@@ -963,6 +1032,10 @@ export function ConnectionEditor() {
     localDefaultParameters,
     localImageCaptioningEnabled,
     localImageCaptioningConnectionId,
+    localDecisionSource,
+    localCredentialsFrom,
+    localMaxStateTokens,
+    localDecisionTimeoutMs,
     localAudioSource,
     localAudioVoice,
     localAudioSoundEffects,
@@ -1009,7 +1082,7 @@ export function ConnectionEditor() {
     const isImageProvider = localProvider === "image_generation";
     const isVideoProvider = localProvider === "video_generation";
     const isAudioProvider = localProvider === "audio";
-    const isMediaProvider = isImageProvider || isVideoProvider || isAudioProvider;
+    const isMediaProvider = isImageProvider || isVideoProvider || isAudioProvider || localProvider === "decision";
     const isLocalAuthProvider = isLocalAuthConnectionProvider(localProvider);
     const defaultParameters = isImageProvider
       ? buildImageDefaultParameters(
@@ -1060,8 +1133,19 @@ export function ConnectionEditor() {
       promptPresetId: !isMediaProvider ? localPromptPresetId || null : null,
       defaultParameters,
       enableCaching: localEnableCaching,
+      anthropicExtendedCacheTtl:
+        (localProvider === "anthropic" && localEnableCaching) || localProvider === "claude_subscription"
+          ? localAnthropicExtendedCacheTtl
+          : false,
       cachingAtDepth: localCachingAtDepth,
       defaultForAgents: localDefaultForAgents,
+      // The Decision fields as edited, so exporting before saving writes what is on screen.
+      decisionSource: localProvider === "decision" ? localDecisionSource : null,
+      maxStateTokens: localProvider === "decision" ? localMaxStateTokens : null,
+      decisionTimeoutMs:
+        localProvider === "decision" && localDecisionTimeoutMs !== defaultDecisionTimeoutMs(localDecisionSource)
+          ? localDecisionTimeoutMs
+          : null,
       embeddingModel: supportsDirectEmbeddings ? localEmbeddingModel : existingEmbeddingModel,
       embeddingBaseUrl: supportsDirectEmbeddings ? embeddingBaseUrlValidation.value : existingEmbeddingBaseUrl,
       embeddingConnectionId: localEmbeddingConnectionId || null,
@@ -1085,18 +1169,23 @@ export function ConnectionEditor() {
       claudeFastMode: localClaudeFastMode,
     };
 
-    downloadJsonFile(
+    void downloadJsonFile(
       createConnectionExportEnvelope([exportRow]),
       `${sanitizeExportFilenamePart(localName || String(currentConnection.name ?? ""), "connection")}.connection.json`,
-    );
-    toast.success(
-      localizeUi("ui.connections.connectioneditor.exportedValue1", {
-        value1: localName || localizeUi("ui.connections.connectioneditor.connection"),
-      }),
-    );
+    ).then((saveStatus) => {
+      if (saveStatus === "saved")
+        toast.success(
+          localizeUi("ui.connections.connectioneditor.exportedValue1", {
+            value1: localName || localizeUi("ui.connections.connectioneditor.connection"),
+          }),
+        );
+    });
   }, [
     conn,
     localProvider,
+    localDecisionSource,
+    localMaxStateTokens,
+    localDecisionTimeoutMs,
     localName,
     localBaseUrl,
     localModel,
@@ -1111,6 +1200,7 @@ export function ConnectionEditor() {
     localImageCaptioningEnabled,
     localImageCaptioningConnectionId,
     localEnableCaching,
+    localAnthropicExtendedCacheTtl,
     localCachingAtDepth,
     localDefaultForAgents,
     localEmbeddingModel,
@@ -1138,6 +1228,7 @@ export function ConnectionEditor() {
 
   const handleTestConnection = useCallback(async () => {
     if (!connectionDetailId) return;
+    const requestScope = testScopeRef.current;
     // Save first if dirty, and wait for it to complete
     if (dirty) {
       try {
@@ -1146,16 +1237,34 @@ export function ConnectionEditor() {
         return;
       }
     }
+    if (testScopeRef.current !== requestScope) return;
     setTestResult(null);
     testConnection.mutate(connectionDetailId, {
-      onSuccess: (data) => setTestResult(data as { success: boolean; message: string; latencyMs: number }),
-      onError: (err) =>
-        setTestResult({ success: false, message: err instanceof Error ? err.message : "Failed", latencyMs: 0 }),
+      onSuccess: (data) => {
+        if (testScopeRef.current !== requestScope) return;
+        if (localProvider === "decision") {
+          const decision = decisionConnectionTestMessage(t, data);
+          setTestResult({ ...data, success: decision.ok, message: decision.message });
+          return;
+        }
+        setTestResult({
+          ...data,
+          message:
+            selectedImageService === "fal" && data.success
+              ? t("connections.mediaSources.fal.configured")
+              : data.message,
+        });
+      },
+      onError: (err) => {
+        if (testScopeRef.current !== requestScope) return;
+        setTestResult({ success: false, message: err instanceof Error ? err.message : "Failed", latencyMs: 0 });
+      },
     });
-  }, [connectionDetailId, dirty, handleSave, testConnection]);
+  }, [connectionDetailId, dirty, handleSave, testConnection, selectedImageService, localProvider, t]);
 
   const handleTestMessage = useCallback(async () => {
     if (!connectionDetailId) return;
+    const requestScope = testScopeRef.current;
     if (dirty) {
       try {
         await handleSave();
@@ -1163,22 +1272,28 @@ export function ConnectionEditor() {
         return;
       }
     }
+    if (testScopeRef.current !== requestScope) return;
     setMsgResult(null);
     testMessage.mutate(connectionDetailId, {
-      onSuccess: (data) =>
-        setMsgResult(data as { success: boolean; response: string; latencyMs: number; error?: string }),
-      onError: (err) =>
+      onSuccess: (data) => {
+        if (testScopeRef.current !== requestScope) return;
+        setMsgResult(data as { success: boolean; response: string; latencyMs: number; error?: string });
+      },
+      onError: (err) => {
+        if (testScopeRef.current !== requestScope) return;
         setMsgResult({
           success: false,
           response: "",
           latencyMs: 0,
           error: err instanceof Error ? err.message : "Failed",
-        }),
+        });
+      },
     });
   }, [connectionDetailId, dirty, handleSave, testMessage]);
 
   const handleDiagnoseClaudeSubscription = useCallback(async () => {
     if (!connectionDetailId) return;
+    const requestScope = testScopeRef.current;
     if (dirty) {
       try {
         await handleSave();
@@ -1186,10 +1301,15 @@ export function ConnectionEditor() {
         return;
       }
     }
+    if (testScopeRef.current !== requestScope) return;
     setClaudeDiagResult(null);
     diagnoseClaudeSubscription.mutate(connectionDetailId, {
-      onSuccess: (data) => setClaudeDiagResult(data),
-      onError: (err) =>
+      onSuccess: (data) => {
+        if (testScopeRef.current !== requestScope) return;
+        setClaudeDiagResult(data);
+      },
+      onError: (err) => {
+        if (testScopeRef.current !== requestScope) return;
         setClaudeDiagResult({
           success: false,
           requestedModel: localModel,
@@ -1200,12 +1320,14 @@ export function ConnectionEditor() {
           response: "",
           errors: [err instanceof Error ? err.message : "Failed"],
           latencyMs: 0,
-        }),
+        });
+      },
     });
   }, [connectionDetailId, dirty, handleSave, diagnoseClaudeSubscription, localModel]);
 
   const handleTestImage = useCallback(async () => {
     if (!connectionDetailId) return;
+    const requestScope = testScopeRef.current;
     if (dirty) {
       try {
         await handleSave();
@@ -1213,9 +1335,11 @@ export function ConnectionEditor() {
         return;
       }
     }
+    if (testScopeRef.current !== requestScope) return;
     setImgTestResult(null);
     testImageGeneration.mutate(connectionDetailId, {
-      onSuccess: (data) =>
+      onSuccess: (data) => {
+        if (testScopeRef.current !== requestScope) return;
         setImgTestResult(
           data as {
             success: boolean;
@@ -1225,8 +1349,10 @@ export function ConnectionEditor() {
             prompt: string;
             error?: string;
           },
-        ),
-      onError: (err) =>
+        );
+      },
+      onError: (err) => {
+        if (testScopeRef.current !== requestScope) return;
         setImgTestResult({
           success: false,
           base64: null,
@@ -1234,12 +1360,14 @@ export function ConnectionEditor() {
           latencyMs: 0,
           prompt: "",
           error: err instanceof Error ? err.message : "Failed",
-        }),
+        });
+      },
     });
   }, [connectionDetailId, dirty, handleSave, testImageGeneration]);
 
   const handleTestVideo = useCallback(async () => {
     if (!connectionDetailId) return;
+    const requestScope = testScopeRef.current;
     if (dirty) {
       try {
         await handleSave();
@@ -1247,9 +1375,11 @@ export function ConnectionEditor() {
         return;
       }
     }
+    if (testScopeRef.current !== requestScope) return;
     setVidTestResult(null);
     testVideoGeneration.mutate(connectionDetailId, {
-      onSuccess: (data) =>
+      onSuccess: (data) => {
+        if (testScopeRef.current !== requestScope) return;
         setVidTestResult(
           data as {
             success: boolean;
@@ -1259,8 +1389,10 @@ export function ConnectionEditor() {
             prompt: string;
             error?: string;
           },
-        ),
-      onError: (err) =>
+        );
+      },
+      onError: (err) => {
+        if (testScopeRef.current !== requestScope) return;
         setVidTestResult({
           success: false,
           base64: null,
@@ -1268,7 +1400,8 @@ export function ConnectionEditor() {
           latencyMs: 0,
           prompt: "",
           error: err instanceof Error ? err.message : "Failed",
-        }),
+        });
+      },
     });
   }, [connectionDetailId, dirty, handleSave, testVideoGeneration]);
 
@@ -1307,7 +1440,9 @@ export function ConnectionEditor() {
 
   const selectModel = useCallback(
     (model: { id: string; context?: number; maxOutput?: number; isRemote?: boolean }) => {
-      setLocalModel(model.id);
+      // The quick model pickers save the same fields (see connectionFieldsForModelPick).
+      const fields = connectionFieldsForModelPick(localProvider, model);
+      setLocalModel(fields.model);
       if (localProvider === "video_generation") {
         const provider = videoSourceToProviderOption(
           localVideoGenerationSource || localVideoService || inferVideoSource(model.id, localBaseUrl),
@@ -1315,16 +1450,21 @@ export function ConnectionEditor() {
         setLocalVideoGenerationSource(provider);
         setLocalVideoService(videoProviderServiceForModel(provider, model.id, localBaseUrl));
       }
-      if (model.context) setLocalMaxContext(Number(model.context));
-      if (model.isRemote && model.maxOutput) setLocalMaxTokensOverride(Number(model.maxOutput));
+      if (fields.maxContext) setLocalMaxContext(fields.maxContext);
+      if (fields.maxTokensOverride) setLocalMaxTokensOverride(fields.maxTokensOverride);
       setShowModelDropdown(false);
       setModelSearch("");
+      testScopeRef.current++;
       setDirty(true);
     },
     [localBaseUrl, localProvider, localVideoGenerationSource, localVideoService],
   );
 
-  const markDirty = useCallback(() => setDirty(true), []);
+  const markDirty = useCallback(() => {
+    // A manual configuration edit invalidates in-flight tests; save hydration does not.
+    testScopeRef.current++;
+    setDirty(true);
+  }, []);
 
   const handleManualModelChange = useCallback(
     (model: string) => {
@@ -1353,10 +1493,13 @@ export function ConnectionEditor() {
   const isImageGenerationProvider = localProvider === "image_generation";
   const isVideoGenerationProvider = localProvider === "video_generation";
   const isAudioProvider = localProvider === "audio";
-  const isMediaGenerationProvider = isImageGenerationProvider || isVideoGenerationProvider || isAudioProvider;
+  const isDecisionProvider = localProvider === "decision";
+  const isMediaGenerationProvider =
+    isImageGenerationProvider || isVideoGenerationProvider || isAudioProvider || isDecisionProvider;
   const isClaudeSubscriptionProvider = localProvider === "claude_subscription";
   const isOpenAIChatGPTProvider = localProvider === "openai_chatgpt";
   const isGrokSubscriptionProvider = localProvider === "grok_subscription";
+  const isNanoGptProvider = localProvider === "nanogpt";
   const isLocalAuthProvider = isLocalAuthConnectionProvider(localProvider);
   const supportsDirectEmbeddingConfig = providerSupportsDirectEmbeddingConfig(localProvider);
   const canTreatAsLocalEndpoint = canProviderTreatAsLocalEndpoint(localProvider);
@@ -1534,6 +1677,10 @@ export function ConnectionEditor() {
                     setLocalProvider(key);
                     // Auto-fill base URL
                     setLocalBaseUrl(info.defaultBaseUrl);
+                    // The base URL and model are reset, so the old image service must be picked again;
+                    // otherwise a hidden-field service like ChatGPT (Codex login) keeps a stale URL.
+                    setLocalImageGenerationSource("");
+                    setLocalImageService(null);
                     // Leave Grok CLI blank so the local CLI can use its
                     // account/default model until the user fetches
                     // `grok models`. Other providers keep their usual seeded
@@ -1548,7 +1695,16 @@ export function ConnectionEditor() {
                     );
                     setLocalMaxTokensOverride(null);
                     setLocalDefaultParametersEnabled(false);
-                    setLocalDefaultParameters(CONNECTION_PARAMETER_DEFAULTS);
+                    setLocalDefaultParameters(
+                      getEditableGenerationParameters(CONNECTION_PARAMETER_DEFAULTS, null, key),
+                    );
+                    if (key === "decision") {
+                      setLocalDecisionSource("typesafe");
+                      setLocalCredentialsFrom("");
+                      setLocalMaxStateTokens(30000);
+                      setLocalDecisionTimeoutMs(DECISION_TIMEOUT_MS.systemOne);
+                      setLocalModel("jev-latest");
+                    }
                     if (key === "audio") {
                       // The provider tile seeds ElevenLabs base URL/model, so
                       // the audio source must reset to match — otherwise a
@@ -1573,7 +1729,7 @@ export function ConnectionEditor() {
                       : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
                   )}
                 >
-                  {info.name}
+                  {key === "decision" ? t("connections.decision.label") : info.name}
                 </button>
               ))}
             </div>
@@ -1721,7 +1877,180 @@ export function ConnectionEditor() {
             </FieldGroup>
           )}
 
-          {!isLocalAuthProvider && (
+          {(localProvider === "openrouter" || localProvider === "custom") && (
+            <button
+              type="button"
+              disabled={
+                dirty || createDecisionConnection.isPending || (localProvider === "custom" && !localModel.trim())
+              }
+              className="text-left text-xs text-[var(--primary)] underline disabled:opacity-50"
+              onClick={() => {
+                if (!connectionDetailId) return;
+                // OpenRouter lends its key to hosted Jev. A Custom connection lends its
+                // server, model and key, so the chat model it already runs answers decisions.
+                const chat = localProvider === "custom";
+                createDecisionConnection.mutate(
+                  {
+                    name: t("connections.decision.linkedName", { name: localName }),
+                    provider: "decision",
+                    decisionSource: chat ? "openai_compatible" : "openrouter",
+                    baseUrl: chat ? localBaseUrl : DECISION_SOURCE_BASE_URLS.openrouter,
+                    apiKey: "",
+                    model: chat ? localModel.trim() : "jev-latest",
+                    credentialsFromConnectionId: connectionDetailId,
+                    defaultForAgents: !(
+                      allConnections as Array<{ provider: string; defaultForAgents?: unknown }> | undefined
+                    )?.some(
+                      (row) =>
+                        row.provider === "decision" &&
+                        (row.defaultForAgents === true || row.defaultForAgents === "true"),
+                    ),
+                  },
+                  {
+                    onSuccess: (created) => useUIStore.getState().openConnectionDetail((created as { id: string }).id),
+                    onError: (error) =>
+                      setSaveError(error instanceof Error ? error.message : t("connections.decision.saveFailed")),
+                  },
+                );
+              }}
+            >
+              {t(localProvider === "custom" ? "connections.decision.chatShortcut" : "connections.decision.shortcut")}
+            </button>
+          )}
+
+          {isDecisionProvider && (
+            <section className="space-y-3">
+              <label className="block text-xs font-medium" htmlFor="decision-source">
+                {t("connections.decision.source")}
+              </label>
+              <select
+                id="decision-source"
+                value={localDecisionSource}
+                className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-sm ring-1 ring-[var(--border)]"
+                onChange={(event) => {
+                  const source = event.target.value as DecisionSource;
+                  setLocalDecisionSource(source);
+                  setLocalBaseUrl(DECISION_SOURCE_BASE_URLS[source]);
+                  setLocalMaxStateTokens(defaultDecisionStateTokens(source));
+                  setLocalDecisionTimeoutMs(defaultDecisionTimeoutMs(source));
+                  setLocalApiKey("");
+                  setClearStoredApiKeyOnSave(true);
+                  const matches =
+                    (allConnections as Array<{ id: string; provider: string }> | undefined)?.filter(
+                      (row) => row.provider === "openrouter",
+                    ) ?? [];
+                  setLocalCredentialsFrom(source === "openrouter" && matches.length === 1 ? matches[0]!.id : "");
+                  markDirty();
+                }}
+              >
+                {DECISION_SOURCES.map((source) => (
+                  <option key={source} value={source}>
+                    {t(`connections.decision.sources.${source}`)}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-[var(--muted-foreground)]">
+                {t(
+                  localDecisionSource === "custom"
+                    ? "connections.decision.customHelp"
+                    : localDecisionSource === "openai_compatible"
+                      ? "connections.decision.chatHelp"
+                      : "connections.decision.privacy",
+                )}
+              </p>
+              {localDecisionSource === "typesafe" && (
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  {t("connections.decision.typesafeAddressHelp")}
+                </p>
+              )}
+              {localDecisionSource !== "typesafe" && (
+                <>
+                  <label className="block text-xs" htmlFor="decision-credentials">
+                    {t("connections.decision.credentials")}
+                  </label>
+                  <select
+                    id="decision-credentials"
+                    value={localCredentialsFrom}
+                    className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-sm ring-1 ring-[var(--border)]"
+                    onChange={(event) => {
+                      setLocalCredentialsFrom(event.target.value);
+                      setLocalApiKey("");
+                      setClearStoredApiKeyOnSave(true);
+                      markDirty();
+                    }}
+                  >
+                    <option value="">{t("connections.decision.separateKey")}</option>
+                    {localCredentialsFrom &&
+                      !(allConnections as Array<{ id: string }> | undefined)?.some(
+                        (row) => row.id === localCredentialsFrom,
+                      ) && (
+                        <option value={localCredentialsFrom} disabled>
+                          {t("connections.decision.errors.needs_relinking")}
+                        </option>
+                      )}
+                    {(allConnections as Array<{ id: string; name: string; provider: string }> | undefined)
+                      ?.filter(
+                        (row) => row.provider === (localDecisionSource === "openrouter" ? "openrouter" : "custom"),
+                      )
+                      .map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {t("connections.decision.useKeyFrom", { name: row.name })}
+                        </option>
+                      ))}
+                  </select>
+                  {localCredentialsFrom && (
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      {t(
+                        localDecisionSource === "openrouter"
+                          ? "connections.decision.billing"
+                          : "connections.decision.sameHost",
+                      )}
+                    </p>
+                  )}
+                </>
+              )}
+              <label className="block text-xs" htmlFor="decision-state-tokens">
+                {t("connections.decision.stateTokens")}
+              </label>
+              <input
+                id="decision-state-tokens"
+                type="number"
+                min={1}
+                max={30000}
+                value={localMaxStateTokens}
+                onChange={(event) => {
+                  setLocalMaxStateTokens(Math.min(30000, Math.max(1, Math.trunc(Number(event.target.value)) || 1)));
+                  markDirty();
+                }}
+                className="w-32 rounded-lg bg-[var(--secondary)] px-3 py-2 text-sm ring-1 ring-[var(--border)]"
+              />
+              <label className="block text-xs" htmlFor="decision-time-limit">
+                {t("connections.decision.timeLimit")}
+              </label>
+              <DraftNumberInput
+                id="decision-time-limit"
+                integer={false}
+                min={DECISION_CONNECTION_TIMEOUT_BOUNDS_MS.min / 1000}
+                max={DECISION_CONNECTION_TIMEOUT_BOUNDS_MS.max / 1000}
+                value={localDecisionTimeoutMs / 1000}
+                ariaDescribedBy="decision-time-limit-help"
+                onCommit={(seconds) => {
+                  setLocalDecisionTimeoutMs(resolveDecisionConnectionTimeoutMs(seconds * 1000));
+                  markDirty();
+                }}
+                className="w-32 rounded-lg bg-[var(--secondary)] px-3 py-2 text-sm ring-1 ring-[var(--border)]"
+              />
+              <p id="decision-time-limit-help" className="text-xs text-[var(--muted-foreground)]">
+                {t("connections.decision.timeLimitHelp", {
+                  min: DECISION_CONNECTION_TIMEOUT_BOUNDS_MS.min / 1000,
+                  max: DECISION_CONNECTION_TIMEOUT_BOUNDS_MS.max / 1000,
+                  default: defaultDecisionTimeoutMs(localDecisionSource) / 1000,
+                })}
+              </p>
+            </section>
+          )}
+
+          {!isLocalAuthProvider && !isCodexImageService && (
             <>
               {/* ── API Key ── */}
               <FieldGroup
@@ -1730,6 +2059,7 @@ export function ConnectionEditor() {
                 help={localizeUi("ui.connections.connectioneditor.yourAuthenticationKeyFromTheAiProviderYouCan")}
               >
                 <input
+                  disabled={isDecisionProvider && !!localCredentialsFrom}
                   value={localApiKey}
                   onChange={(e) => {
                     setLocalApiKey(e.target.value);
@@ -1760,6 +2090,84 @@ export function ConnectionEditor() {
                 )}
               </FieldGroup>
 
+              {/* ── NanoGPT management token + subscription usage ── */}
+              {isNanoGptProvider && (
+                // A fragment's children are not direct children of the parent's
+                // space-y-6, so this block carries its own vertical rhythm.
+                <div className="space-y-6">
+                  <FieldGroup
+                    label={localizeUi("ui.connections.connectioneditor.managementToken")}
+                    icon={<Key size="0.875rem" className="text-sky-400" />}
+                    help={localizeUi("ui.connections.connectioneditor.managementTokenHelp")}
+                  >
+                    <input
+                      value={localManagementToken}
+                      onChange={(e) => {
+                        setLocalManagementToken(e.target.value);
+                        markDirty();
+                      }}
+                      type="password"
+                      className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                      placeholder={localizeUi("ui.connections.connectioneditor.leaveEmptyToKeepExistingKey")}
+                    />
+                    <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                      {localizeUi("ui.connections.connectioneditor.managementTokenEncryptedHint")}
+                    </p>
+                    <label className="mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 text-[0.625rem] text-[var(--muted-foreground)]">
+                      <input
+                        type="checkbox"
+                        checked={clearStoredManagementTokenOnSave}
+                        onChange={(e) => {
+                          setClearStoredManagementTokenOnSave(e.target.checked);
+                          if (e.target.checked) setLocalManagementToken("");
+                          markDirty();
+                        }}
+                        className="h-3 w-3 shrink-0 accent-[var(--destructive)]"
+                      />
+                      {localizeUi("ui.connections.connectioneditor.clearStoredManagementToken")}
+                    </label>
+                    <a
+                      href="https://nano-gpt.com/settings#management-api-tokens"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1.5 inline-flex items-center gap-1 text-[0.6875rem] font-medium text-sky-400 transition-colors hover:text-sky-300"
+                    >
+                      <ExternalLink size="0.625rem" />
+                      {localizeUi("ui.connections.connectioneditor.createAManagementToken")}
+                    </a>
+                  </FieldGroup>
+
+                  <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-[var(--secondary)] px-3 py-2.5 ring-1 ring-[var(--border)]">
+                    <input
+                      type="checkbox"
+                      checked={localShowUsageWidget}
+                      onChange={(e) => {
+                        setLocalShowUsageWidget(e.target.checked);
+                        markDirty();
+                      }}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--primary)]"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">
+                        {localizeUi("ui.connections.connectioneditor.showSubscriptionUsage")}
+                      </span>
+                      <span className="mt-0.5 block text-[0.625rem] text-[var(--muted-foreground)]">
+                        {localizeUi("ui.connections.connectioneditor.showSubscriptionUsageHelp")}
+                      </span>
+                    </span>
+                  </label>
+
+                  {localShowUsageWidget && connectionDetailId && !dirty && (
+                    <NanoGptUsageWidget connectionId={connectionDetailId} />
+                  )}
+                  {localShowUsageWidget && dirty && (
+                    <p className="rounded-xl bg-[var(--secondary)] px-3 py-2 text-[0.625rem] text-[var(--muted-foreground)]">
+                      {localizeUi("ui.connections.connectioneditor.saveToLoadSubscriptionUsage")}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* ── Base URL ── */}
               <FieldGroup
                 label={localizeUi("ui.connections.connectioneditor.baseUrl")}
@@ -1767,6 +2175,7 @@ export function ConnectionEditor() {
                 help={localizeUi("ui.connections.connectioneditor.theApiEndpointUrlUsuallyAutoFilledForKnown")}
               >
                 <input
+                  disabled={isDecisionProvider && localDecisionSource === "openrouter"}
                   value={localBaseUrl}
                   onChange={(e) => {
                     setLocalBaseUrl(e.target.value);
@@ -1845,17 +2254,23 @@ export function ConnectionEditor() {
                           ? t("connections.mediaSources.zai.name")
                           : src.id === "arli"
                             ? t("connections.mediaSources.arli.name")
-                            : src.name;
+                            : src.id === "codex_chatgpt"
+                              ? t("connections.mediaSources.codexChatgpt.name")
+                              : src.name;
                   const sourceDescription =
-                    src.id === "atlas"
-                      ? t("connections.mediaSources.atlas.imageDescription")
-                      : src.id === "swarmui"
-                        ? t("connections.mediaSources.swarmui.imageDescription")
-                        : src.id === "zai"
-                          ? t("connections.mediaSources.zai.imageDescription")
-                          : src.id === "arli"
-                            ? t("connections.mediaSources.arli.imageDescription")
-                            : src.description;
+                    src.id === "fal"
+                      ? t("connections.mediaSources.fal.imageDescription")
+                      : src.id === "atlas"
+                        ? t("connections.mediaSources.atlas.imageDescription")
+                        : src.id === "swarmui"
+                          ? t("connections.mediaSources.swarmui.imageDescription")
+                          : src.id === "zai"
+                            ? t("connections.mediaSources.zai.imageDescription")
+                            : src.id === "arli"
+                              ? t("connections.mediaSources.arli.imageDescription")
+                              : src.id === "codex_chatgpt"
+                                ? t("connections.mediaSources.codexChatgpt.imageDescription")
+                                : src.description;
                   return (
                     <button
                       key={src.id}
@@ -1871,6 +2286,16 @@ export function ConnectionEditor() {
                         }
                         if (src.id === "zai" && !ZAI_IMAGE_MODELS.some((model) => model.id === localModel.trim())) {
                           setLocalModel("glm-image");
+                        }
+                        if (src.id === "fal" && selectedImageService !== "fal") {
+                          setLocalModel("fal-ai/flux/schnell");
+                        }
+                        if (src.id === "codex_chatgpt" && selectedImageService !== "codex_chatgpt") {
+                          // The hidden Base URL and API key fields must not keep another service's values.
+                          setLocalBaseUrl(src.defaultBaseUrl);
+                          setLocalApiKey("");
+                          setClearStoredApiKeyOnSave(true);
+                          setLocalModel(CODEX_IMAGE_MODEL);
                         }
                         markDirty();
                       }}
@@ -1891,7 +2316,9 @@ export function ConnectionEditor() {
                 })}
               </div>
               <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                {localizeUi("ui.connections.connectioneditor.pickTheBackendTypeOnceThenPointBaseUrl_cfb1337")}
+                {isCodexImageService
+                  ? t("connections.mediaSources.codexChatgpt.loginHelp")
+                  : localizeUi("ui.connections.connectioneditor.pickTheBackendTypeOnceThenPointBaseUrl_cfb1337")}
               </p>
               {selectedImageService === "runpod_comfyui" && (
                 <div className="mt-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[0.625rem] text-amber-300/80">
@@ -2304,6 +2731,7 @@ export function ConnectionEditor() {
                                 {modelFetchSourceLabel}
                               </span>
                             )}
+                            {localShowUsageWidget && <SubscriptionCostPill model={m} />}
                             {localModel === m.id && <Check size="0.75rem" className="text-sky-400" />}
                           </div>
                           <span className="text-[0.625rem] text-[var(--muted-foreground)]">{m.id}</span>
@@ -2582,6 +3010,7 @@ export function ConnectionEditor() {
             <VideoGenerationDefaultsPanel
               value={localVideoDefaults}
               source={selectedVideoProvider}
+              model={localModel}
               remoteLoras={remoteLoras}
               expanded={videoDefaultsExpanded}
               onExpandedChange={setVideoDefaultsExpanded}
@@ -2779,9 +3208,7 @@ export function ConnectionEditor() {
             <FieldGroup
               label={localizeUi("ui.connections.connectioneditor.defaultChatParameters")}
               icon={<Zap size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated" />}
-              help={localizeUi(
-                "ui.connections.connectioneditor.defaultGenerationSettingsForChatsThatUseThisConnection",
-              )}
+              help={localizeUi("ui.connections.connectioneditor.defaultGenerationSettingsForChatsAndAgents")}
             >
               <SettingsSwitch
                 label={localizeUi("ui.connections.connectioneditor.useCustomDefaultsForThisConnection")}
@@ -2811,6 +3238,8 @@ export function ConnectionEditor() {
                     effectiveParameters={parameterPreview.data?.parameters}
                     provider={localProvider}
                     model={localModel}
+                    baseUrl={localBaseUrl}
+                    modelCapabilities={selectedModelCapabilities}
                     value={localDefaultParameters}
                     showServiceTier={localProvider === "openrouter" || localProvider === "nanogpt"}
                     showCustomHeaders={
@@ -2854,7 +3283,8 @@ export function ConnectionEditor() {
                                 connection.id !== connectionDetailId &&
                                 connection.provider !== "image_generation" &&
                                 connection.provider !== "video_generation" &&
-                                connection.provider !== "audio",
+                                connection.provider !== "audio" &&
+                                connection.provider !== "decision",
                             )
                             .map((connection) => (
                               <option key={connection.id as string} value={connection.id as string}>
@@ -3022,6 +3452,23 @@ export function ConnectionEditor() {
             </FieldGroup>
           )}
 
+          {isClaudeSubscriptionProvider && (
+            <FieldGroup
+              label={localizeUi("ui.connections.connectioneditor.promptCaching")}
+              icon={<Zap size="0.875rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />}
+            >
+              <SettingsSwitch
+                label={localizeUi("ui.connections.connectioneditor.extendedTokenCaching1Hour")}
+                description={localizeUi("ui.connections.connectioneditor.subscriptionExtendedCacheDescription")}
+                checked={localAnthropicExtendedCacheTtl}
+                onChange={(checked) => {
+                  setLocalAnthropicExtendedCacheTtl(checked);
+                  markDirty();
+                }}
+              />
+            </FieldGroup>
+          )}
+
           {/* ── Claude (Subscription) — Fast Mode toggle ── */}
           {isClaudeSubscriptionProvider && (
             <FieldGroup
@@ -3170,7 +3617,8 @@ export function ConnectionEditor() {
                         c.id !== connectionDetailId &&
                         c.provider !== "image_generation" &&
                         c.provider !== "video_generation" &&
-                        c.provider !== "audio",
+                        c.provider !== "audio" &&
+                        c.provider !== "decision",
                     )
                     .map((c) => (
                       <option key={c.id as string} value={c.id as string}>
@@ -3275,7 +3723,11 @@ export function ConnectionEditor() {
 
             <p className="text-[0.625rem] text-[var(--muted-foreground)]">
               <strong>{localizeUi("ui.connections.connectioneditor.testConnection")}</strong>{" "}
-              {localizeUi("ui.connections.connectioneditor.verifiesYourApiKeyAgainstTheProviderCatalogOr")}
+              {selectedImageService === "fal"
+                ? t("connections.mediaSources.fal.testHelp")
+                : isCodexImageService
+                  ? t("connections.mediaSources.codexChatgpt.testHelp")
+                  : localizeUi("ui.connections.connectioneditor.verifiesYourApiKeyAgainstTheProviderCatalogOr")}
               {!isMediaGenerationProvider && (
                 <>
                   {" "}
@@ -3598,8 +4050,7 @@ function ImageGenerationDefaultsPanel({
   onExpandedChange: (expanded: boolean) => void;
   onChange: (
     next:
-      | ImageGenerationDefaultsProfile
-      | ((current: ImageGenerationDefaultsProfile) => ImageGenerationDefaultsProfile),
+      ImageGenerationDefaultsProfile | ((current: ImageGenerationDefaultsProfile) => ImageGenerationDefaultsProfile),
   ) => void;
   onReset: () => void;
 }) {
@@ -3951,6 +4402,16 @@ function ImageGenerationDefaultsPanel({
                   className="bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]"
                   labelClassName="text-[var(--foreground)]"
                 />
+                {source === "swarmui" && (
+                  <SettingsCheckbox
+                    label={localizeUi("connections.mediaSources.swarmui.saveToBackend")}
+                    description={localizeUi("connections.mediaSources.swarmui.saveToBackendHelp")}
+                    checked={comfyui.saveToBackend === true}
+                    onChange={(checked) => updateComfyUi({ saveToBackend: checked })}
+                    className="bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]"
+                    labelClassName="text-[var(--foreground)]"
+                  />
+                )}
                 <ComfyUiLoraSettings
                   idPrefix="image-comfyui"
                   value={comfyui.loras}
@@ -4111,6 +4572,7 @@ function TextSetting({
 function VideoGenerationDefaultsPanel({
   value,
   source,
+  model,
   remoteLoras,
   expanded,
   onExpandedChange,
@@ -4119,6 +4581,8 @@ function VideoGenerationDefaultsPanel({
 }: {
   value: VideoGenerationDefaultsProfile;
   source: string;
+  /** The connection's model field; Atlas Cloud options are stored per model. */
+  model: string;
   remoteLoras: RemoteConnectionModel[];
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
@@ -4196,6 +4660,8 @@ function VideoGenerationDefaultsPanel({
       openrouter: { ...value.openrouter, ...patch },
     });
   };
+  // An empty model field means the server falls back to the Atlas Cloud default model.
+  const atlasModel = model.trim() || DEFAULT_VIDEO_MODELS.atlas;
   const updateAtlas = (patch: Partial<VideoGenerationDefaultsProfile["atlas"]>) => {
     onChange({
       ...value,
@@ -4406,6 +4872,19 @@ function VideoGenerationDefaultsPanel({
                     </select>
                   </label>
                 </div>
+                {service === "atlas" && (
+                  <AtlasCloudModelOptions
+                    model={atlasModel}
+                    value={value.atlas.modelOptions[atlasModel] ?? {}}
+                    onChange={(options) => {
+                      const { [atlasModel]: _previous, ...otherModels } = value.atlas.modelOptions;
+                      updateAtlas({
+                        modelOptions:
+                          Object.keys(options).length > 0 ? { ...otherModels, [atlasModel]: options } : otherModels,
+                      });
+                    }}
+                  />
+                )}
                 {service === "comfyui" && (
                   <ComfyUiLoraSettings
                     idPrefix="video-comfyui"

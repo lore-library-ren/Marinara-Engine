@@ -6,12 +6,12 @@ import type { DB } from "../../db/connection.js";
 import { apiConnections } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
 import { encryptApiKey, decryptApiKey } from "../../utils/crypto.js";
-import type { CreateConnectionInput } from "@marinara-engine/shared";
+import { MAX_PINNED_MODELS, parsePinnedModels, type CreateConnectionInput } from "@marinara-engine/shared";
 import { sweepDanglingConnectionReferences } from "./connection-reference-cleanup.js";
 import { clearConnectionRateLimit, setConnectionRateLimit } from "../llm/connection-rate-limit-registry.js";
 import { logger } from "../../lib/logger.js";
 
-type ConnectionDefaultCategory = "image_generation" | "video_generation" | "audio" | "language";
+type ConnectionDefaultCategory = "image_generation" | "video_generation" | "audio" | "decision" | "language";
 
 /**
  * Decrypt a stored connection for internal use and keep the per-connection outbound throttle
@@ -29,15 +29,79 @@ function defaultCategoryForProvider(provider: string): ConnectionDefaultCategory
   if (provider === "image_generation") return "image_generation";
   if (provider === "video_generation") return "video_generation";
   if (provider === "audio") return "audio";
+  if (provider === "decision") return "decision";
   return "language";
+}
+
+/** One model in a saved provider list: display and limit fields only, never credentials. */
+export type SavedConnectionModel = { id: string; name: string } & Record<string, unknown>;
+export type SavedConnectionModelList = { fetchedAt: string; models: SavedConnectionModel[] };
+
+/** The only fields kept from a provider's model entry when its list is saved. */
+const SAVED_MODEL_EXTRA_FIELDS = [
+  "context",
+  "maxOutput",
+  "capabilities",
+  "subscriptionIncluded",
+  "inputTokenMultiplier",
+] as const;
+
+/** The fields that decide which list a provider returns; when one changes, the saved list is stale. */
+const MODEL_LIST_SOURCE_FIELDS = ["provider", "baseUrl", "apiKeyEncrypted"] as const;
+
+/** Whether a connection keeps its fetched model list. Claude (Subscription) answers from a built-in list. */
+export function connectionSavesModelList(provider: string): boolean {
+  return defaultCategoryForProvider(provider) === "language" && provider !== "claude_subscription";
+}
+
+/** Keep the known model fields, drop entries without an ID, and keep the first of any duplicate IDs. */
+function toSavedModels(models: readonly unknown[]): SavedConnectionModel[] {
+  const seen = new Set<string>();
+  const saved: SavedConnectionModel[] = [];
+  for (const entry of models) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const model: SavedConnectionModel = {
+      id,
+      name: typeof record.name === "string" && record.name.trim() ? record.name : id,
+    };
+    for (const key of SAVED_MODEL_EXTRA_FIELDS) if (record[key] !== undefined) model[key] = record[key];
+    saved.push(model);
+  }
+  return saved;
+}
+
+/** Read a connection's saved model list, or null when there is none or it is malformed. */
+export function readSavedModelList(row: { savedModels?: unknown } | null | undefined): SavedConnectionModelList | null {
+  if (typeof row?.savedModels !== "string" || !row.savedModels) return null;
+  try {
+    const parsed = JSON.parse(row.savedModels) as { fetchedAt?: unknown; models?: unknown };
+    if (typeof parsed.fetchedAt !== "string" || !Array.isArray(parsed.models)) return null;
+    return { fetchedAt: parsed.fetchedAt, models: toSavedModels(parsed.models) };
+  } catch {
+    return null;
+  }
+}
+
+/** API responses never carry the saved model list; `/connections/:id/models` serves it. */
+export function withoutSavedModels<T extends Record<string, unknown>>(row: T): Omit<T, "savedModels"> {
+  const { savedModels: _savedModels, ...rest } = row;
+  return rest;
 }
 
 export function createConnectionsStorage(db: DB) {
   return {
     async list() {
       const rows = await db.select().from(apiConnections).orderBy(desc(apiConnections.updatedAt));
-      // Mask API keys in list response
-      return rows.map((r: any) => ({ ...r, apiKeyEncrypted: r.apiKeyEncrypted ? "••••••••" : "" }));
+      // Mask API keys and management tokens in list response
+      return rows.map(({ savedModels: _savedModels, ...r }: any) => ({
+        ...r,
+        apiKeyEncrypted: r.apiKeyEncrypted ? "••••••••" : "",
+        managementTokenEncrypted: r.managementTokenEncrypted ? "••••••••" : "",
+      }));
     },
 
     async getById(id: string) {
@@ -50,6 +114,19 @@ export function createConnectionsStorage(db: DB) {
       const conn = await this.getById(id);
       if (!conn || conn.profileImportReviewRequired === "true") return null;
       return withDecryptedKey(conn);
+    },
+
+    /**
+     * Read only the decrypted NanoGPT management token for the usage widget.
+     * Deliberately separate from `withDecryptedKey` so the token never rides
+     * along on ordinary provider-building reads.
+     */
+    async getManagementToken(id: string) {
+      const conn = await this.getById(id);
+      if (!conn || conn.profileImportReviewRequired === "true") return null;
+      if (conn.provider !== "nanogpt") return null;
+      const token = decryptApiKey(conn.managementTokenEncrypted ?? "");
+      return token ? token : null;
     },
 
     async getDefault() {
@@ -199,6 +276,21 @@ export function createConnectionsStorage(db: DB) {
       return withDecryptedKey(row);
     },
 
+    /** Decision defaults are independent of chat, agent, and media defaults. */
+    async getDefaultForDecision() {
+      const rows = await db
+        .select()
+        .from(apiConnections)
+        .where(
+          and(
+            eq(apiConnections.defaultForAgents, "true"),
+            eq(apiConnections.provider, "decision"),
+            ne(apiConnections.profileImportReviewRequired, "true"),
+          ),
+        );
+      return rows[0] ? withDecryptedKey(rows[0]) : null;
+    },
+
     async create(input: CreateConnectionInput) {
       const id = newId();
       const timestamp = now();
@@ -208,16 +300,22 @@ export function createConnectionsStorage(db: DB) {
         name: input.name,
         provider: input.provider,
         baseUrl: input.baseUrl ?? "",
-        apiKeyEncrypted: encryptApiKey(input.apiKey ?? ""),
+        apiKeyEncrypted: encryptApiKey(
+          input.provider === "decision" && input.credentialsFromConnectionId ? "" : (input.apiKey ?? ""),
+        ),
+        managementTokenEncrypted: encryptApiKey(input.provider === "nanogpt" ? (input.managementToken ?? "") : ""),
+        showUsageWidget: String(input.provider === "nanogpt" && (input.showUsageWidget ?? false)),
         profileImportReviewRequired: "false",
         model: input.model ?? "",
+        pinnedModels: JSON.stringify(parsePinnedModels(input.pinnedModels ?? [])),
+        savedModels: null,
         imagePath: input.imagePath ?? null,
         maxContext: input.maxContext ?? 128000,
-        isDefault: String(input.isDefault ?? false),
+        isDefault: String(input.provider !== "decision" && (input.isDefault ?? false)),
         fallbackForMain: String(providerCategory === "language" && (input.fallbackForMain ?? false)),
-        useForRandom: String(input.useForRandom ?? false),
+        useForRandom: String(input.provider !== "decision" && (input.useForRandom ?? false)),
         defaultForAgents: String(input.defaultForAgents ?? false),
-        fallbackForAgents: String(input.fallbackForAgents ?? false),
+        fallbackForAgents: String(input.provider !== "decision" && (input.fallbackForAgents ?? false)),
         enableCaching: String(input.enableCaching ?? false),
         anthropicExtendedCacheTtl: String(input.anthropicExtendedCacheTtl ?? false),
         cachingAtDepth: input.cachingAtDepth ?? 5,
@@ -236,6 +334,10 @@ export function createConnectionsStorage(db: DB) {
         videoGenerationSource: input.videoGenerationSource ?? null,
         videoService: input.videoService ?? null,
         audioSource: input.audioSource ?? null,
+        decisionSource: input.decisionSource ?? null,
+        credentialsFromConnectionId: input.provider === "decision" ? (input.credentialsFromConnectionId ?? null) : null,
+        maxStateTokens: input.maxStateTokens ?? null,
+        decisionTimeoutMs: input.decisionTimeoutMs ?? null,
         audioVoice: input.audioVoice ?? null,
         audioSoundEffects: String(input.audioSoundEffects ?? false),
         audioMusic: String(input.audioMusic ?? false),
@@ -248,7 +350,7 @@ export function createConnectionsStorage(db: DB) {
       };
       await db.transaction(async (tx) => {
         // If this is set as default, unset others.
-        if (input.isDefault) {
+        if (input.isDefault && input.provider !== "decision") {
           await tx.update(apiConnections).set({ isDefault: "false" });
           values.fallbackForMain = "false";
         }
@@ -260,7 +362,12 @@ export function createConnectionsStorage(db: DB) {
         if (input.defaultForAgents) {
           values.fallbackForAgents = "false";
           const category = defaultCategoryForProvider(input.provider);
-          if (category === "image_generation" || category === "video_generation" || category === "audio") {
+          if (
+            category === "image_generation" ||
+            category === "video_generation" ||
+            category === "audio" ||
+            category === "decision"
+          ) {
             await tx
               .update(apiConnections)
               .set({ defaultForAgents: "false" })
@@ -277,10 +384,15 @@ export function createConnectionsStorage(db: DB) {
             }
           }
         }
-        if (input.fallbackForAgents) {
+        if (input.fallbackForAgents && input.provider !== "decision") {
           values.defaultForAgents = "false";
           const category = defaultCategoryForProvider(input.provider);
-          if (category === "image_generation" || category === "video_generation" || category === "audio") {
+          if (
+            category === "image_generation" ||
+            category === "video_generation" ||
+            category === "audio" ||
+            category === "decision"
+          ) {
             await tx
               .update(apiConnections)
               .set({ fallbackForAgents: "false" })
@@ -348,11 +460,46 @@ export function createConnectionsStorage(db: DB) {
       const shouldClearAgentFallbacks =
         data.fallbackForAgents === true ||
         (data.fallbackForAgents === undefined && data.provider !== undefined && existing.fallbackForAgents === "true");
+      if (data.decisionSource !== undefined) updateFields.decisionSource = data.decisionSource;
+      if (data.credentialsFromConnectionId !== undefined)
+        updateFields.credentialsFromConnectionId = data.credentialsFromConnectionId;
+      if (data.maxStateTokens !== undefined) updateFields.maxStateTokens = data.maxStateTokens;
+      if (data.decisionTimeoutMs !== undefined) updateFields.decisionTimeoutMs = data.decisionTimeoutMs;
       if (data.name !== undefined) updateFields.name = data.name;
       if (data.provider !== undefined) updateFields.provider = data.provider;
       if (data.baseUrl !== undefined) updateFields.baseUrl = data.baseUrl;
       if (data.apiKey !== undefined) updateFields.apiKeyEncrypted = encryptApiKey(data.apiKey);
+      if (
+        effectiveProvider === "decision" &&
+        (data.credentialsFromConnectionId === undefined
+          ? existing.credentialsFromConnectionId
+          : data.credentialsFromConnectionId)
+      ) {
+        updateFields.apiKeyEncrypted = encryptApiKey("");
+      }
+      if (effectiveProvider !== "decision") updateFields.credentialsFromConnectionId = null;
+      if (data.managementToken !== undefined) {
+        updateFields.managementTokenEncrypted = encryptApiKey(data.managementToken);
+      }
+      if (data.showUsageWidget !== undefined) {
+        updateFields.showUsageWidget = String(data.showUsageWidget);
+      }
+      if (effectiveProvider !== "nanogpt") {
+        updateFields.managementTokenEncrypted = encryptApiKey("");
+        updateFields.showUsageWidget = "false";
+      }
       if (data.model !== undefined) updateFields.model = data.model;
+      if (data.pinnedModels !== undefined)
+        updateFields.pinnedModels = JSON.stringify(parsePinnedModels(data.pinnedModels));
+      // A different provider, address or key can serve a different model list, so the saved one is dropped
+      // and the next look at the list fetches it again. The editor resends unchanged values, so compare them.
+      if (
+        (data.provider !== undefined && data.provider !== existing.provider) ||
+        (data.baseUrl !== undefined && data.baseUrl !== existing.baseUrl) ||
+        (data.apiKey !== undefined && data.apiKey !== decryptApiKey(existing.apiKeyEncrypted))
+      ) {
+        updateFields.savedModels = null;
+      }
       if (data.imagePath !== undefined) updateFields.imagePath = data.imagePath;
       if (data.maxContext !== undefined) updateFields.maxContext = data.maxContext;
       if (data.isDefault !== undefined) {
@@ -448,8 +595,13 @@ export function createConnectionsStorage(db: DB) {
       if (data.treatAsLocalEndpoint !== undefined) {
         updateFields.treatAsLocalEndpoint = String(data.treatAsLocalEndpoint);
       }
+      if (effectiveProvider === "decision") {
+        updateFields.isDefault = "false";
+        updateFields.useForRandom = "false";
+        updateFields.fallbackForAgents = "false";
+      }
       await db.transaction(async (tx) => {
-        if (shouldClearDefault) {
+        if (shouldClearDefault && effectiveProvider !== "decision") {
           await tx.update(apiConnections).set({ isDefault: "false" });
           updateFields.fallbackForMain = "false";
         }
@@ -460,7 +612,12 @@ export function createConnectionsStorage(db: DB) {
         if (shouldClearAgentDefaults) {
           updateFields.fallbackForAgents = "false";
           const category = defaultCategoryForProvider(effectiveProvider);
-          if (category === "image_generation" || category === "video_generation" || category === "audio") {
+          if (
+            category === "image_generation" ||
+            category === "video_generation" ||
+            category === "audio" ||
+            category === "decision"
+          ) {
             await tx
               .update(apiConnections)
               .set({ defaultForAgents: "false" })
@@ -488,10 +645,15 @@ export function createConnectionsStorage(db: DB) {
             }
           }
         }
-        if (shouldClearAgentFallbacks) {
+        if (shouldClearAgentFallbacks && effectiveProvider !== "decision") {
           updateFields.defaultForAgents = "false";
           const category = defaultCategoryForProvider(effectiveProvider);
-          if (category === "image_generation" || category === "video_generation" || category === "audio") {
+          if (
+            category === "image_generation" ||
+            category === "video_generation" ||
+            category === "audio" ||
+            category === "decision"
+          ) {
             await tx
               .update(apiConnections)
               .set({ fallbackForAgents: "false" })
@@ -546,6 +708,9 @@ export function createConnectionsStorage(db: DB) {
         apiKeyEncrypted: source.apiKeyEncrypted,
         profileImportReviewRequired: source.profileImportReviewRequired,
         model: source.model,
+        pinnedModels: source.pinnedModels,
+        // The copy keeps the same provider, address and key, so the saved list still applies.
+        savedModels: source.savedModels,
         imagePath: source.imagePath,
         maxContext: source.maxContext,
         isDefault: "false",
@@ -570,6 +735,10 @@ export function createConnectionsStorage(db: DB) {
         videoGenerationSource: source.videoGenerationSource,
         videoService: source.videoService,
         audioSource: source.audioSource,
+        decisionSource: source.decisionSource,
+        credentialsFromConnectionId: source.credentialsFromConnectionId,
+        maxStateTokens: source.maxStateTokens,
+        decisionTimeoutMs: source.decisionTimeoutMs,
         audioVoice: source.audioVoice,
         audioSoundEffects: source.audioSoundEffects,
         audioMusic: source.audioMusic,
@@ -577,6 +746,8 @@ export function createConnectionsStorage(db: DB) {
         maxTokensOverride: source.maxTokensOverride,
         maxParallelJobs: source.maxParallelJobs,
         maxRequestsPerMinute: source.maxRequestsPerMinute,
+        managementTokenEncrypted: source.managementTokenEncrypted,
+        showUsageWidget: source.showUsageWidget,
         claudeFastMode: source.claudeFastMode,
         treatAsLocalEndpoint: source.treatAsLocalEndpoint,
         createdAt: timestamp,
@@ -597,7 +768,11 @@ export function createConnectionsStorage(db: DB) {
       // before its provider changed.
       return rows
         .filter(
-          (r: any) => r.provider !== "audio" && r.provider !== "image_generation" && r.provider !== "video_generation",
+          (r: any) =>
+            r.provider !== "decision" &&
+            r.provider !== "audio" &&
+            r.provider !== "image_generation" &&
+            r.provider !== "video_generation",
         )
         .map((r: any) => withDecryptedKey(r));
     },
@@ -619,6 +794,47 @@ export function createConnectionsStorage(db: DB) {
           cleanup.connectionsUpdated,
         );
       }
+    },
+
+    /**
+     * Save a freshly fetched model list, unless the provider, address or key changed while it was being
+     * fetched. It is a cache, so `updatedAt` stays as it is.
+     */
+    async saveModelListIfUnchanged(
+      expected: typeof apiConnections.$inferSelect,
+      models: readonly unknown[],
+    ): Promise<SavedConnectionModelList | null> {
+      return db.transaction(async (tx) => {
+        const [current] = await tx.select().from(apiConnections).where(eq(apiConnections.id, expected.id));
+        if (!current || MODEL_LIST_SOURCE_FIELDS.some((field) => current[field] !== expected[field])) return null;
+        const list: SavedConnectionModelList = { fetchedAt: now(), models: toSavedModels(models) };
+        await tx
+          .update(apiConnections)
+          .set({ savedModels: JSON.stringify(list) })
+          .where(eq(apiConnections.id, expected.id));
+        return list;
+      });
+    },
+
+    /** Pin or unpin one model. Pins stay in the order they were added. */
+    async setModelPinned(
+      id: string,
+      model: string,
+      pinned: boolean,
+    ): Promise<{ pinnedModels: string[] } | "not_found" | "limit"> {
+      return db.transaction(async (tx) => {
+        const [row] = await tx.select().from(apiConnections).where(eq(apiConnections.id, id));
+        if (!row) return "not_found" as const;
+        const current = parsePinnedModels(row.pinnedModels);
+        if (pinned && current.includes(model)) return { pinnedModels: current };
+        if (pinned && current.length >= MAX_PINNED_MODELS) return "limit" as const;
+        const pinnedModels = pinned ? [...current, model] : current.filter((entry) => entry !== model);
+        await tx
+          .update(apiConnections)
+          .set({ pinnedModels: JSON.stringify(pinnedModels), updatedAt: now() })
+          .where(eq(apiConnections.id, id));
+        return { pinnedModels };
+      });
     },
 
     async updateDefaultParameters(id: string, params: Record<string, unknown> | null) {

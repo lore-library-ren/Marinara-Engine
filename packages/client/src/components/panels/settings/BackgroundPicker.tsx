@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { BACKGROUND_THUMBNAIL_WIDTH } from "@marinara-engine/shared";
 import { api } from "../../../lib/api-client";
+import { saveExportUrl } from "../../../lib/file-download";
 import { cn } from "../../../lib/utils";
 import {
   filterAndSortBackgrounds,
@@ -921,6 +922,19 @@ export function BackgroundPicker({
                 {localizeUi("ui.panels.backgroundpicker.roleplayDefaultShort")}
               </button>
             )}
+            <button
+              type="button"
+              data-background-download
+              onClick={() => {
+                cancelPendingClose();
+                void saveExportUrl(background.url, background.filename);
+              }}
+              className={cn(CARD_ACTION_CLASS, isFloatingActions && FLOATING_CARD_ACTION_CLASS)}
+              title={localizeUi("ui.panels.backgroundpicker.downloadBackground")}
+              aria-label={localizeUi("ui.panels.backgroundpicker.downloadValue1", { value1: title })}
+            >
+              <Download size="0.875rem" />
+            </button>
             {background.deletable !== false && isEditable && (
               <button
                 type="button"
@@ -1005,7 +1019,7 @@ export function BackgroundPicker({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="group flex min-w-0 items-center gap-2.5 rounded-lg p-1.5 text-left ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--secondary)]/55 hover:ring-[var(--primary)]/45"
+          className="group flex min-w-0 items-center gap-2.5 rounded-lg p-1.5 text-left ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)]/55 hover:ring-[var(--primary)]/45"
         >
           <span className="relative aspect-video w-20 shrink-0 overflow-hidden rounded-md bg-[var(--secondary)] ring-1 ring-[var(--border)]">
             {previewUrl ? (
@@ -1114,7 +1128,7 @@ export function BackgroundPicker({
               onFilesSelected={(files) => void handleUpload(files)}
               icon={uploading ? <Loader2 size="0.875rem" className="animate-spin" /> : <Download size="0.875rem" />}
               labelClassName="max-md:sr-only"
-              className="!h-10 shrink-0 !rounded-lg !border !border-solid !px-3 !py-0 text-[0.6875rem] hover:border-[var(--primary)]/40 hover:bg-[var(--secondary)]/50 max-md:w-10 max-md:!px-0 md:!h-9"
+              className="!h-10 shrink-0 !rounded-lg !border !border-solid !px-3 !py-0 text-[0.6875rem] hover:border-[var(--primary)]/40 hover:bg-[var(--accent)]/50 max-md:w-10 max-md:!px-0 md:!h-9"
             />
           </div>
 

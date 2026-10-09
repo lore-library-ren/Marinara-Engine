@@ -32,6 +32,7 @@ import {
   Camera,
 } from "lucide-react";
 import { useUIStore, type LorebookPanelCategory, type LorebookPanelSort } from "../../stores/ui.store";
+import { sortPanelFolders } from "../../lib/panel-sort";
 import { useChatStore } from "../../stores/chat.store";
 import {
   fetchAllLorebookPages,
@@ -47,6 +48,7 @@ import type { Lorebook, LorebookCategory, LorebookEntry, LorebookFolder } from "
 import { confirmNonEmptyFolderDelete, showConfirmDialog } from "../../lib/app-dialogs";
 import { cn } from "../../lib/utils";
 import { api } from "../../lib/api-client";
+import { EXPORT_FAILED_TOAST_ID } from "../../lib/file-download";
 import { getChatCharacterIds } from "../../lib/chat-macros";
 import { buildLorebookDuplicateInput } from "../../lib/lorebook-duplicate";
 import {
@@ -62,6 +64,7 @@ import { useTouchFolderDrag } from "../../hooks/use-touch-folder-drag";
 import { SelectionActionBar } from "../ui/SelectionActionBar";
 import { SmoothFolderContent } from "../ui/SmoothFolderContent";
 import { TouchDragHandle } from "../ui/TouchDragHandle";
+import { LorebookSelectionEnableActions } from "./library/LorebookSelectionEnableActions";
 import { useLocalizedUiText } from "../../localization/use-localized-ui-text";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { PanelLoadMoreBar } from "./PanelLoadMoreBar";
@@ -321,7 +324,16 @@ export function LorebooksPanel() {
     }
   }, [filtered, sort]);
 
-  const lorebookById = useMemo(() => new Map(sorted.map((lorebook) => [lorebook.id, lorebook])), [sorted]);
+  const sortedFolders = useMemo(() => {
+    const folders = sortPanelFolders(lorebookFolders, sort === "tokens" ? "name-asc" : sort);
+    if (sort !== "tokens") return folders;
+    const tokens = new Map(sorted.map((lorebook) => [lorebook.id, lorebook.tokenBudget ?? 0]));
+    const totals = new Map(
+      folders.map((folder) => [folder.id, folder.itemIds.reduce((total, id) => total + (tokens.get(id) ?? 0), 0)]),
+    );
+    return folders.sort((a, b) => totals.get(b.id)! - totals.get(a.id)!);
+  }, [lorebookFolders, sort, sorted]);
+
   const folderFilterActive = searchQuery.trim().length > 0 || activeCategory !== "all" || activeTag !== null;
 
   const folderedLorebookIds = useMemo(() => {
@@ -336,19 +348,6 @@ export function LorebooksPanel() {
     () => sorted.filter((lorebook) => !folderedLorebookIds.has(lorebook.id)),
     [sorted, folderedLorebookIds],
   );
-
-  // Group by category for "all" view
-  const grouped = useMemo(() => {
-    if (activeCategory !== "all") return null;
-    const map = new Map<string, LorebookListItem[]>();
-    for (const lb of rootLorebooks) {
-      const cat = lb.category || "uncategorized";
-      const list = map.get(cat) ?? [];
-      list.push(lb);
-      map.set(cat, list);
-    }
-    return map;
-  }, [rootLorebooks, activeCategory]);
 
   const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
@@ -368,20 +367,22 @@ export function LorebooksPanel() {
     if (selectedLorebookIds.size === 0) return;
     setExportingSelected(true);
     try {
-      await api.downloadPost(
+      const saveStatus = await api.downloadPost(
         "/lorebooks/export-bulk",
         { ids: [...selectedLorebookIds], format: "native" },
         "marinara-lorebooks.zip",
       );
-      toast.success(
-        localizeUi("ui.panels.lorebookspanel.exportedValue1LorebookValue2", {
-          value1: selectedLorebookIds.size,
-          value2: selectedLorebookIds.size === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
-        }),
-      );
+      if (saveStatus === "saved")
+        toast.success(
+          localizeUi("ui.panels.lorebookspanel.exportedValue1LorebookValue2", {
+            value1: selectedLorebookIds.size,
+            value2: selectedLorebookIds.size === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
+          }),
+        );
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : localizeUi("ui.panels.lorebookspanel.failedToExportLorebooks"),
+        { id: EXPORT_FAILED_TOAST_ID },
       );
     } finally {
       setExportingSelected(false);
@@ -970,11 +971,10 @@ export function LorebooksPanel() {
       )}
 
       <div className="flex flex-col gap-0.5">
-        {lorebookFolders.map((folder) => {
+        {sortedFolders.map((folder) => {
           const isEditing = editingFolderId === folder.id;
-          const folderItems = folder.itemIds
-            .map((id) => lorebookById.get(id))
-            .filter((item): item is LorebookListItem => Boolean(item));
+          const memberIds = new Set(folder.itemIds);
+          const folderItems = sorted.filter((item) => memberIds.has(item.id));
           if (folderFilterActive && folderItems.length === 0) return null;
           const isExpanded = (folderFilterActive && folderItems.length > 0) || expandedFolderId === folder.id;
           return (
@@ -1043,6 +1043,7 @@ export function LorebooksPanel() {
                       onKeyDown={(event) => {
                         if (event.key === "Enter") event.currentTarget.blur();
                         if (event.key === "Escape") {
+                          event.preventDefault();
                           setEditingFolderId(null);
                           setEditFolderName("");
                         }
@@ -1161,22 +1162,7 @@ export function LorebooksPanel() {
           )}
 
           <div className="stagger-children flex min-h-8 flex-col gap-1 rounded-xl transition-colors">
-            {activeCategory === "all" && grouped
-              ? // Grouped view
-                Array.from(grouped.entries()).map(([category, books]) => {
-                  const catMeta = CATEGORIES.find((c) => c.id === category) ?? CATEGORIES[6];
-                  return (
-                    <div key={category} className="mb-2">
-                      <div className="mb-1 flex items-center gap-1.5 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                        {catMeta.label}
-                        <span className="ml-auto text-[0.625rem] font-normal">{books.length}</span>
-                      </div>
-                      {books.map((lb) => renderLorebookRow(lb))}
-                    </div>
-                  );
-                })
-              : // Flat view
-                rootLorebooks.map((lb) => renderLorebookRow(lb))}
+            {rootLorebooks.map((lb) => renderLorebookRow(lb))}
           </div>
         </>
       )}
@@ -1196,6 +1182,7 @@ export function LorebooksPanel() {
         <SelectionActionBar
           placement="panel"
           selectedCount={selectedLorebookIds.size}
+          extraAction={<LorebookSelectionEnableActions selectedIds={selectedLorebookIds} />}
           onExport={() => void handleExportSelected()}
           onDelete={handleDeleteSelected}
           exporting={exportingSelected}
@@ -1324,8 +1311,8 @@ function LorebookRow({
         </button>
       )}
       <div className={cn("min-w-0 flex-1", !selectionMode && "pr-0 max-md:pr-24 [@media(pointer:coarse)]:pr-24")}>
-        <div className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium">{lorebook.name}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-sm font-medium">{lorebook.name}</span>
           {!lorebook.enabled && (
             <span className="rounded bg-[var(--muted)]/50 px-1 py-0.5 text-[0.5625rem] text-[var(--muted-foreground)]">
               {localizeUi("ui.panels.lorebookrow.off")}
