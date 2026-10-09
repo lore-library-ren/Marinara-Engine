@@ -54,25 +54,26 @@ if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
 const runningMarinara = await findRunningMarinara();
 if (runningMarinara) {
   console.log(`  [OK] Marinara Engine ${runningMarinara.build} is already running at ${browserUrl}`);
-  process.exit(2);
-}
+  // Let fetch handles drain: forced exit can abort libuv on Windows and lose code 2.
+  process.exitCode = 2;
+} else {
+  const server = createServer();
 
-const server = createServer();
-
-server.once("error", (err) => {
-  if (err && typeof err === "object" && "code" in err && err.code === "EADDRINUSE") {
-    printPortBusyMessage();
-  } else {
-    console.error("");
-    console.error(`  [ERROR] Could not check whether ${host}:${rawPort} is available.`);
-    console.error(err);
-    console.error("");
-  }
-  process.exit(1);
-});
-
-server.listen({ host, port }, () => {
-  server.close(() => {
-    process.exit(0);
+  server.once("error", (err) => {
+    if (err && typeof err === "object" && "code" in err && err.code === "EADDRINUSE") {
+      printPortBusyMessage();
+    } else {
+      console.error("");
+      console.error(`  [ERROR] Could not check whether ${host}:${rawPort} is available.`);
+      console.error(err);
+      console.error("");
+    }
+    process.exit(1);
   });
-});
+
+  server.listen({ host, port }, () => {
+    server.close(() => {
+      process.exitCode = 0;
+    });
+  });
+}

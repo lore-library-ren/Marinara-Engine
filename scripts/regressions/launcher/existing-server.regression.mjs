@@ -49,6 +49,7 @@ const healthyAddress = healthyServer.address();
 assert.ok(healthyAddress && typeof healthyAddress === "object");
 const healthyResult = await runChecker(healthyAddress.port);
 assert.equal(healthyResult.status, 2, healthyResult.stderr);
+assert.equal(healthyResult.stderr, "", "Healthy detection must exit without a native runtime assertion");
 assert.match(healthyResult.stdout, /Marinara Engine v2\.4\.4 regression is already running/u);
 await close(healthyServer);
 

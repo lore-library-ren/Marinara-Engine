@@ -4,6 +4,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+- On Windows, reopening a running local Marinara no longer forces the health checker to exit with active fetch handles, which could crash Node and incorrectly launch a second storage writer.
+
 - Updated the local fork to 2.5.0 while preserving Cartesia, persistent OpenCode sessions, explicit custom API settings, Add spice, and Conversation playback.
 
 - Added manual speak/stop controls to Conversation message actions, using the existing TTS voice settings and playback service.
