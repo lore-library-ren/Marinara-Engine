@@ -1,0 +1,22 @@
+{
+  "backend": "llama_cpp",
+  "modelPath": "gemma-4-E2B-it-Q8_0.gguf",
+  "quantization": "q8_0",
+  "useForTrackers": true,
+  "useAsAgentsDefault": false,
+  "useForGameScene": true,
+  "contextSize": 8192,
+  "maxTokens": 2048,
+  "temperature": 0.1,
+  "topP": 0.95,
+  "topK": 64,
+  "maxParallelJobs": 2,
+  "gpuLayers": -1,
+  "enableNativeToolCalls": true,
+  "embeddingPooling": "none",
+  "embeddingBatchSize": 512,
+  "runtimePreference": "nvidia",
+  "kvCacheType": "f16",
+  "decisionThinking": "auto",
+  "decisionSelection": "sidecar:local"
+}
