@@ -115,6 +115,7 @@ function buildTTSConfigCacheSignature(config: TTSConfig): string {
     config.baseUrl,
     config.model,
     config.audioFormat,
+    config.source === "cartesia" ? config.cartesiaPronunciationDictId : "",
     config.speed,
     config.elevenLabsStability,
     config.elevenLabsLanguageCode,

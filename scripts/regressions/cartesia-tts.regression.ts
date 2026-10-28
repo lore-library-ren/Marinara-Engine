@@ -1,3 +1,4 @@
+import { withTTSVoiceRequestCacheKeys } from "../../packages/client/src/lib/tts-dialogue.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import Fastify from "../../packages/server/node_modules/fastify/fastify.js";
@@ -130,7 +131,16 @@ try {
       url: "/tts/speak",
       payload: { text: "Hello from Marinara.", voice, audioConnectionId },
     });
+  const oldCache = withTTSVoiceRequestCacheKeys([{ text: "gege" }], config, "message")[0];
+  config.cartesiaPronunciationDictId = "pdict_test";
+  const newCache = withTTSVoiceRequestCacheKeys([{ text: "gege" }], config, "message")[0];
+  assert.notEqual(oldCache?.cacheKey, newCache?.cacheKey);
+  assert.notDeepEqual(oldCache?.cacheAliases, newCache?.cacheAliases);
   let audio = await speak();
+  assert.equal(requests.at(-1)?.body.pronunciation_dict_id, "pdict_test");
+  config.cartesiaPronunciationDictId = "";
+  await speak();
+  assert.equal("pronunciation_dict_id" in requests.at(-1)!.body, false);
   assert.equal(audio.statusCode, 200, audio.body);
   assert.equal(audio.headers["content-type"], "audio/wav");
   assert.deepEqual(audio.rawPayload, wav);

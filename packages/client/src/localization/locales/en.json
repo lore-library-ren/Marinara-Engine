@@ -4147,6 +4147,8 @@
   "ui.cartesia.connectionDescription": "Sonic speech synthesis and custom voices",
   "ui.cartesia.modelHelp": "Cartesia model ID. Defaults to sonic-3.6.",
   "ui.cartesia.ownedVoice": "{{name}} — Your voice ({{id}})",
+  "ui.cartesia.pronunciationDictionary": "Pronunciation dictionary ID",
+  "ui.cartesia.pronunciationDictionaryHelp": "Applies to all Cartesia speech. Paste a saved Cartesia dictionary ID, or leave blank to use default pronunciation.",
   "ui.cartesia.refreshVoices": "Refresh voices",
   "ui.cartesia.saveBeforeRefresh": "Save the Cartesia connection and API key before refreshing voices. Choose a voice, then save again.",
   "ui.cartesia.selectVoiceFirst": "Select a Cartesia voice first",

@@ -1735,7 +1735,15 @@ export async function ttsRoutes(app: FastifyInstance) {
                   ? optionalBearerHeaders(cfg.apiKey)
                   : openAiHeaders(cfg.apiKey),
         body: useCartesiaSpeech
-          ? JSON.stringify(buildCartesiaSpeechRequest({ text, model, voice: requestVoice, speed: cfg.speed }))
+          ? JSON.stringify(
+              buildCartesiaSpeechRequest({
+                text,
+                model,
+                voice: requestVoice,
+                speed: cfg.speed,
+                pronunciationDictId: cfg.cartesiaPronunciationDictId,
+              }),
+            )
           : useNanoGptSpeech
             ? JSON.stringify({
                 model,

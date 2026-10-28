@@ -978,6 +978,7 @@ export function TTSConfigCard() {
   const [npcDefaultVoicesEnabled, setNpcDefaultVoicesEnabled] = useState(false);
   const [npcDefaultMaleVoices, setNpcDefaultMaleVoices] = useState<string[]>([]);
   const [npcDefaultFemaleVoices, setNpcDefaultFemaleVoices] = useState<string[]>([]);
+  const [cartesiaPronunciationDictId, setCartesiaPronunciationDictId] = useState("");
   const [speed, setSpeed] = useState(1.0);
   const [elevenLabsStability, setElevenLabsStability] = useState(0.5);
   const [elevenLabsLanguageCode, setElevenLabsLanguageCode] = useState("");
@@ -1053,6 +1054,7 @@ export function TTSConfigCard() {
     setNpcDefaultMaleVoices(savedConfig.npcDefaultMaleVoices ?? []);
     setNpcDefaultFemaleVoices(savedConfig.npcDefaultFemaleVoices ?? []);
     setSpeed(savedConfig.speed);
+    setCartesiaPronunciationDictId(savedConfig.cartesiaPronunciationDictId ?? "");
     setElevenLabsStability(savedConfig.elevenLabsStability ?? 0.5);
     setElevenLabsLanguageCode(savedConfig.elevenLabsLanguageCode ?? "");
     setElevenLabsGameSoundEffects(savedConfig.elevenLabsGameSoundEffects ?? false);
@@ -1146,6 +1148,7 @@ export function TTSConfigCard() {
     roleplaySpeakerExtractorEnabled,
     roleplaySpeakerExtractorConnectionId,
     roleplaySpeakerExtractorEmotionsEnabled,
+    cartesiaPronunciationDictId,
     dialoguePauseMs: dialoguePauseSeconds * 1000,
     audioFormat,
     callAudioEnabled,
@@ -1684,6 +1687,22 @@ export function TTSConfigCard() {
           </FieldRow>
 
           {/* Model */}
+          {source === "cartesia" && (
+            <FieldRow
+              label={localizeUi("ui.cartesia.pronunciationDictionary")}
+              help={localizeUi("ui.cartesia.pronunciationDictionaryHelp")}
+            >
+              <input
+                aria-label={localizeUi("ui.cartesia.pronunciationDictionary")}
+                value={cartesiaPronunciationDictId}
+                onChange={(e) => {
+                  setCartesiaPronunciationDictId(e.target.value);
+                  mark({ cartesiaPronunciationDictId: e.target.value });
+                }}
+                className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)]"
+              />
+            </FieldRow>
+          )}
           <FieldRow
             label={localizeUi("ui.panels.ttsconfigcard.model")}
             help={

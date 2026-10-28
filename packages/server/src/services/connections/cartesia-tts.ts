@@ -16,11 +16,18 @@ export function cartesiaHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-export function buildCartesiaSpeechRequest(input: { text: string; model: string; voice: string; speed: number }) {
+export function buildCartesiaSpeechRequest(input: {
+  text: string;
+  model: string;
+  voice: string;
+  speed: number;
+  pronunciationDictId?: string;
+}) {
   // Provider-specific transcript/emotion translation can be added here without changing playback callers.
   return {
     model_id: input.model.trim() || CARTESIA_DEFAULT_MODEL,
     transcript: input.text,
+    ...(input.pronunciationDictId?.trim() ? { pronunciation_dict_id: input.pronunciationDictId.trim() } : {}),
     voice: { id: cartesiaVoiceIdSchema.parse(input.voice.trim()) },
     output_format: { container: "wav", encoding: "pcm_s16le", sample_rate: 44_100 },
     generation_config: { speed: Math.min(1.5, Math.max(0.6, input.speed)) },

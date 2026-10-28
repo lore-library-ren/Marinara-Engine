@@ -4,6 +4,8 @@ The installed branch is `local/cartesia-2.4.6` in https://github.com/lore-librar
 
 Preserve these changes on future updates:
 
+- Cartesia pronunciation dictionary selection in TTS settings applies to all Cartesia speech; dictionary IDs remain in local settings and are included in audio cache signatures.
+
 - Manual Conversation speak/stop controls and the one-shot Add spice rewrite action.
 - Native Cartesia Audio/TTS, Sonic 3.6, owned-voice discovery, and WAV output (commit `b4d041b0a`). Credentials and voice selections remain in local storage, outside Git.
 - OpenCode conversation identity, adapted from `5718f783d` on `fix/local-opencode-session`. Main chat, agents, summaries, and nested requests retain the persistent chat ID. Explicit session headers take precedence; cross-origin redirects strip the session header. Connection diagnostics without a chat use `marinara-connection-test:<connection-id>`; ordinary independent calls do not invent a session.

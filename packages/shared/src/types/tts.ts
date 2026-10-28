@@ -150,6 +150,8 @@ const ttsConfigBaseSchema = z.object({
   voice: z.string().default("alloy"),
   model: z.string().default("tts-1"),
   /** 0.25 – 4.0 */
+  /** Applies to all Cartesia speech, including Audio connections. */
+  cartesiaPronunciationDictId: z.string().trim().max(200).default(""),
   speed: z.number().min(0.25).max(4.0).default(1.0),
   /** ElevenLabs only: 0.0 = more expressive/creative, 1.0 = more stable/robust */
   elevenLabsStability: z.number().min(0).max(1).default(0.5),
