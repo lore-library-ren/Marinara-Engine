@@ -83,6 +83,10 @@ assert.deepEqual(
   state.calls.at(-1)[0].map((r: any) => r.voice),
   ["caleb-voice", "friend-voice"],
 );
+state.config.personaVoiceAssignments = [{ personaId: "lolo", voice: "lolo-voice" }];
+const personaButton = ConversationMessageTTS({ ...props, personaId: "lolo" });
+personaButton.props.onClick();
+assert.equal(state.calls.at(-1)[0][0].voice, "lolo-voice", "persona identity overrides a same-named character");
 state.config.enabled = false;
 assert.equal(ConversationMessageTTS(props), null);
 delete (globalThis as any).__conversationTtsTest;

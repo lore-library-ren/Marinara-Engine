@@ -17,3 +17,7 @@ Automatic Engine updates are disabled in this installation's local `.env`. Befor
 The 2.5.0 merge retains explicit OpenCode headers and real chat IDs instead of upstream request-generated sessions. Custom endpoints retain their configured sampling/reasoning choices, including raw overrides. Shared ChatOptions now carries conversationId following upstream type extraction.
 
 Validation for the 2.5.0 merge: full `pnpm check` passed (localization, formatting, lint/type checks and production build). Eleven focused regression suites passed: Cartesia TTS, OpenCode sessions, connection defaults, provider compatibility, Conversation TTS actions, Game generation parameters, Game satellite connection parameters, agent activation, generation replay, TTS source persistence and TTS voice assignment. Live external provider generation is separate from these mock/local checks.
+
+## Persona TTS voices
+
+Preserve personaVoiceAssignments in TTS provider profiles, the Persona voices controls, message snapshot identity routing in Conversation and Roleplay, and cache invalidation when assignments change.

@@ -97,6 +97,7 @@ import { ttsService } from "../../lib/tts-service";
 import { useTTSConfig } from "../../hooks/use-tts";
 import {
   buildTTSVoiceRequests,
+  getTTSUserIdentity,
   findTTSCharacterIdBySpeakerName,
   withTTSVoiceRequestCacheKeys,
 } from "../../lib/tts-dialogue";
@@ -2074,12 +2075,15 @@ export const ChatMessage = memo(function ChatMessage({
   // TTS
   const { data: ttsConfig } = useTTSConfig();
   const ttsEnabled = ttsConfig?.enabled ?? false;
+  const ttsUserIdentity = isUser ? getTTSUserIdentity(message.extra, personaInfo) : null;
+  const ttsPersonaId = ttsUserIdentity?.source === "persona" ? ttsUserIdentity.id : undefined;
   const ttsSpeakerName =
-    message.role === "narrator"
+    ttsUserIdentity?.name ||
+    (message.role === "narrator"
       ? "Narrator"
       : message.characterId
         ? characterMap?.get(message.characterId)?.name
-        : undefined;
+        : undefined);
   // Same lookup as autoplay in ChatArea, so replaying a message uses the voice it autoplayed with.
   const resolveTTSCharacterId = useCallback(
     (speaker?: string | null) => (characterMap ? findTTSCharacterIdBySpeakerName(speaker, characterMap) : null),
@@ -2093,6 +2097,7 @@ export const ChatMessage = memo(function ChatMessage({
       ttsSpeakerName,
       message.characterId,
       resolveTTSCharacterId,
+      ttsPersonaId,
     );
     return withTTSVoiceRequestCacheKeys(
       visualNovel || followSpeechParagraphs
@@ -2108,6 +2113,7 @@ export const ChatMessage = memo(function ChatMessage({
     resolveTTSCharacterId,
     ttsConfig,
     ttsSpeakerName,
+    ttsPersonaId,
     visualNovel,
     followSpeechParagraphs,
   ]);

@@ -29,6 +29,7 @@ export interface ConversationMessageActionsProps {
   message: Pick<Message, "id" | "chatId" | "content"> & { characterId?: string | null; extra?: unknown };
   charIdByName?: Map<string, string> | null;
   name: string;
+  personaId?: string | null;
   isUser: boolean;
   // Visibility
   showActions: boolean;
@@ -65,6 +66,7 @@ export interface ConversationMessageActionsProps {
 export function ConversationMessageActions({
   message,
   charIdByName,
+  personaId,
   name,
   isUser,
   showActions,
@@ -144,7 +146,9 @@ export function ConversationMessageActions({
         onClick={onCopy}
         title={localizeUi("lorebook.editor.batch.copy")}
       />
-      {!thinkingOnly && <ConversationMessageTTS message={message} name={name} charIdByName={charIdByName} />}
+      {!thinkingOnly && (
+        <ConversationMessageTTS personaId={personaId} message={message} name={name} charIdByName={charIdByName} />
+      )}
       {!thinkingOnly && <ReplyToMessageButton message={message} name={name} />}
       {onPickReaction && <ReactionAddButton onPick={onPickReaction} />}
       {!thinkingOnly && <MessageMarksAction message={message} align={isUser ? "right" : "left"} stopPropagation />}

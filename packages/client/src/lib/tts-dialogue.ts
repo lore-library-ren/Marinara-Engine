@@ -6,6 +6,22 @@ import {
 } from "@marinara-engine/shared";
 import { DIALOGUE_QUOTE_CAPTURE_GROUP_PATTERN_SOURCE, stripSurroundingDialogueQuotes } from "./dialogue-quotes";
 
+export function getTTSUserIdentity(extra: unknown, current?: { id?: string; name: string; source?: string }) {
+  let parsed = extra;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      parsed = null;
+    }
+  }
+  const snapshot = (parsed as { personaSnapshot?: { personaId?: string; name?: string; source?: string } } | null)
+    ?.personaSnapshot;
+  return snapshot
+    ? { id: snapshot.personaId ?? null, name: snapshot.name ?? "", source: snapshot.source ?? "persona" }
+    : { id: current?.id ?? null, name: current?.name ?? "", source: current?.source ?? "persona" };
+}
+
 export interface TTSUtterance {
   text: string;
   speaker?: string;
@@ -127,6 +143,7 @@ function buildTTSConfigCacheSignature(config: TTSConfig): string {
     config.narratorVoice,
     config.voiceMode,
     JSON.stringify(config.voiceAssignments ?? []),
+    JSON.stringify(config.personaVoiceAssignments ?? []),
     config.npcDefaultVoicesEnabled ? "npc-defaults" : "npc-global",
     JSON.stringify(config.npcDefaultMaleVoices ?? []),
     JSON.stringify(config.npcDefaultFemaleVoices ?? []),
@@ -454,6 +471,7 @@ export function buildTTSVoiceRequests(
   fallbackSpeaker?: string | null,
   fallbackCharacterId?: string | null,
   resolveCharacterIdForSpeaker?: (speaker?: string | null) => string | null | undefined,
+  personaId?: string | null,
 ): TTSVoiceRequest[] {
   const normalized = filterTTSText(decodeEncodedSpeakerTags(text), config);
   const hasSpeakerTags = /<speaker="[^"]*">/i.test(normalized);
@@ -478,7 +496,13 @@ export function buildTTSVoiceRequests(
       ? (resolveCharacterIdForSpeaker?.(speaker) ??
         (speakerKey && speakerKey === fallbackSpeakerKey ? fallbackCharacterId : undefined))
       : fallbackCharacterId;
-    const voice = resolveTTSVoiceForSpeaker(config, speaker, resolvedCharacterId);
+    // An explicit persona context must not inherit a same-named character voice.
+    const isPersonaUtterance = personaId !== undefined && (!speakerKey || speakerKey === fallbackSpeakerKey);
+    const voice = isPersonaUtterance
+      ? config.voiceMode === "per-character"
+        ? config.personaVoiceAssignments?.find((entry) => entry.personaId === personaId)?.voice || config.voice
+        : config.voice
+      : resolveTTSVoiceForSpeaker(config, speaker, resolvedCharacterId);
     if (config.source === "elevenlabs" && !voice) return [];
 
     const chunks = splitTTSChunks(utterance.text, config);

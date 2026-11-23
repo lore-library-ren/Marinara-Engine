@@ -24,7 +24,7 @@ import {
 import { cn } from "../../../lib/utils";
 import { toast } from "sonner";
 import { useTTSConfig, useUpdateTTSConfig, useTTSModels, useTTSVoices } from "../../../hooks/use-tts";
-import { useCharacters } from "../../../hooks/use-characters";
+import { useCharacters, usePersonas } from "../../../hooks/use-characters";
 import { useConnections } from "../../../hooks/use-connections";
 import { ttsService } from "../../../lib/tts-service";
 import {
@@ -136,6 +136,7 @@ function defaultSourceProfile(source: TTSSource): TTSSourceProfile {
     elevenLabsGameMusic: false,
     voiceMode: "single",
     voiceAssignments: [],
+    personaVoiceAssignments: [],
     narratorVoiceEnabled: false,
     narratorVoice: defaults.voice,
     npcDefaultVoicesEnabled: false,
@@ -962,6 +963,8 @@ export function TTSConfigCard() {
   const { data: savedConfig, isLoading } = useTTSConfig();
   const updateConfig = useUpdateTTSConfig();
   const { data: characters } = useCharacters();
+  const { data: personas } = usePersonas();
+  const [personaVoiceAssignments, setPersonaVoiceAssignments] = useState<TTSConfig["personaVoiceAssignments"]>([]);
   const { data: connections } = useConnections();
 
   // Local draft state
@@ -1048,6 +1051,7 @@ export function TTSConfigCard() {
     setVoice(savedConfig.voice);
     setVoiceMode(savedConfig.voiceMode ?? "single");
     setVoiceAssignments(savedConfig.voiceAssignments ?? []);
+    setPersonaVoiceAssignments(savedConfig.personaVoiceAssignments ?? []);
     setNarratorVoiceEnabled(savedConfig.narratorVoiceEnabled ?? false);
     setNarratorVoice(savedConfig.narratorVoice ?? "");
     setNpcDefaultVoicesEnabled(savedConfig.npcDefaultVoicesEnabled ?? false);
@@ -1127,6 +1131,7 @@ export function TTSConfigCard() {
     voice,
     voiceMode,
     voiceAssignments,
+    personaVoiceAssignments,
     narratorVoiceEnabled,
     narratorVoice,
     npcDefaultVoicesEnabled,
@@ -1212,6 +1217,7 @@ export function TTSConfigCard() {
     setVoice(nextProfile.voice);
     setVoiceMode(nextProfile.voiceMode);
     setVoiceAssignments(nextProfile.voiceAssignments);
+    setPersonaVoiceAssignments(nextProfile.personaVoiceAssignments);
     setNarratorVoiceEnabled(nextProfile.narratorVoiceEnabled);
     setNarratorVoice(nextProfile.narratorVoice);
     setNpcDefaultVoicesEnabled(nextProfile.npcDefaultVoicesEnabled);
@@ -1331,10 +1337,20 @@ export function TTSConfigCard() {
         voice,
         narratorVoice,
         ...voiceAssignments.map((assignment) => assignment.voice),
+        ...personaVoiceAssignments.map((assignment) => assignment.voice),
         ...npcDefaultMaleVoices,
         ...npcDefaultFemaleVoices,
       ]),
-    [narratorVoice, npcDefaultFemaleVoices, npcDefaultMaleVoices, source, voice, voiceAssignments, voicesData],
+    [
+      narratorVoice,
+      npcDefaultFemaleVoices,
+      npcDefaultMaleVoices,
+      source,
+      voice,
+      voiceAssignments,
+      personaVoiceAssignments,
+      voicesData,
+    ],
   );
   const voicesFromProvider = voicesData?.fromProvider ?? false;
   const voicesErrorMessage = voicesError
@@ -1983,6 +1999,51 @@ export function TTSConfigCard() {
                     {localizeUi("ui.panels.ttsconfigcard.addCharactersInTheCharactersTabBeforeAssigningCharacter")}
                   </p>
                 )}
+              </div>
+            </FieldRow>
+          )}
+
+          {voiceMode === "per-character" && (
+            <FieldRow label={localizeUi("ui.tts.personaVoices")} help={localizeUi("ui.tts.personaVoicesHelp")}>
+              <div className="space-y-2">
+                {!personas?.length && (
+                  <p className="text-xs text-[var(--muted-foreground)]">{localizeUi("ui.tts.noPersonas")}</p>
+                )}
+                {(personas ?? []).map((persona) => {
+                  const selected = personaVoiceAssignments.find((entry) => entry.personaId === persona.id)?.voice ?? "";
+                  const change = (voice: string) => {
+                    const next = personaVoiceAssignments.filter((entry) => entry.personaId !== persona.id);
+                    if (voice) next.push({ personaId: persona.id, voice });
+                    setPersonaVoiceAssignments(next);
+                    mark({ personaVoiceAssignments: next });
+                  };
+                  return (
+                    <div key={persona.id} className="space-y-2 rounded-lg border border-[var(--border)] p-2">
+                      <div className="text-xs">{persona.name}</div>
+                      <div className="flex min-w-0 gap-2">
+                        <CustomizableVoiceInput
+                          value={selected}
+                          onChange={change}
+                          options={voiceOptions}
+                          placeholder={localizeUi("ui.tts.defaultPersonaVoice")}
+                          ariaLabel={localizeUi("ui.tts.personaVoiceFor", { name: persona.name })}
+                          testId={`tts-persona-voice-${persona.id}`}
+                          compact
+                        />
+                        {selected && (
+                          <button
+                            type="button"
+                            onClick={() => change("")}
+                            className="mari-chrome-control mari-chrome-control--small shrink-0"
+                            aria-label={localizeUi("ui.tts.resetPersonaVoice", { name: persona.name })}
+                          >
+                            <X size="0.75rem" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </FieldRow>
           )}

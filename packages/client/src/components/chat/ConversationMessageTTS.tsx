@@ -12,9 +12,11 @@ export function ConversationMessageTTS({
   message,
   name,
   charIdByName,
+  personaId,
 }: {
   message: { id: string; content: string; characterId?: string | null };
   name: string;
+  personaId?: string | null;
   charIdByName?: Map<string, string> | null;
 }) {
   const { t } = useTranslation();
@@ -26,14 +28,19 @@ export function ConversationMessageTTS({
     () =>
       config
         ? withTTSVoiceRequestCacheKeys(
-            buildTTSVoiceRequests(message.content, config, name, message.characterId, (speaker) =>
-              speaker ? charIdByName?.get(normalizeTextForMatch(speaker)) : undefined,
+            buildTTSVoiceRequests(
+              message.content,
+              config,
+              name,
+              message.characterId,
+              (speaker) => (speaker ? charIdByName?.get(normalizeTextForMatch(speaker)) : undefined),
+              personaId,
             ),
             config,
             message.id,
           )
         : [],
-    [config, message.content, message.characterId, message.id, name, charIdByName],
+    [config, message.content, message.characterId, message.id, name, charIdByName, personaId],
   );
   const active = playback.id === message.id;
   const loading = active && playback.state === "loading";

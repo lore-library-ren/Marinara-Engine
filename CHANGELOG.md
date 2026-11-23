@@ -4,6 +4,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- Assign provider-specific voices to personas in Text to Speech settings for Conversation and Roleplay message playback, preserving historical persona identity.
+
 - Added a Cartesia pronunciation dictionary setting for all speech paths; changing dictionaries refreshes cached message audio.
 
 - On Windows, reopening a running local Marinara no longer forces the health checker to exit with active fetch handles, which could crash Node and incorrectly launch a second storage writer.
